@@ -37,6 +37,7 @@ export const DEFAULT_MAP_LAYERS: MapLayers = {
   waterways: false,
   outages: true,
   datacenters: false,
+  protests: true,
 };
 
 export const MONITOR_COLORS = [

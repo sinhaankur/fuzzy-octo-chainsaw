@@ -12,3 +12,4 @@ export * from './fred';
 export * from './outages';
 export * from './ais';
 export * from './cable-activity';
+export * from './protests';

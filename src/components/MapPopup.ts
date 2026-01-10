@@ -1,12 +1,12 @@
-import type { ConflictZone, Hotspot, Earthquake, NewsItem, MilitaryBase, StrategicWaterway, APTGroup, NuclearFacility, EconomicCenter, GammaIrradiator, Pipeline, UnderseaCable, CableAdvisory, RepairShip, InternetOutage, AIDataCenter, AisDisruptionEvent } from '@/types';
+import type { ConflictZone, Hotspot, Earthquake, NewsItem, MilitaryBase, StrategicWaterway, APTGroup, NuclearFacility, EconomicCenter, GammaIrradiator, Pipeline, UnderseaCable, CableAdvisory, RepairShip, InternetOutage, AIDataCenter, AisDisruptionEvent, SocialUnrestEvent } from '@/types';
 import type { WeatherAlert } from '@/services/weather';
 import { UNDERSEA_CABLES } from '@/config';
 
-export type PopupType = 'conflict' | 'hotspot' | 'earthquake' | 'weather' | 'base' | 'waterway' | 'apt' | 'nuclear' | 'economic' | 'irradiator' | 'pipeline' | 'cable' | 'cable-advisory' | 'repair-ship' | 'outage' | 'datacenter' | 'ais';
+export type PopupType = 'conflict' | 'hotspot' | 'earthquake' | 'weather' | 'base' | 'waterway' | 'apt' | 'nuclear' | 'economic' | 'irradiator' | 'pipeline' | 'cable' | 'cable-advisory' | 'repair-ship' | 'outage' | 'datacenter' | 'ais' | 'protest';
 
 interface PopupData {
   type: PopupType;
-  data: ConflictZone | Hotspot | Earthquake | WeatherAlert | MilitaryBase | StrategicWaterway | APTGroup | NuclearFacility | EconomicCenter | GammaIrradiator | Pipeline | UnderseaCable | CableAdvisory | RepairShip | InternetOutage | AIDataCenter | AisDisruptionEvent;
+  data: ConflictZone | Hotspot | Earthquake | WeatherAlert | MilitaryBase | StrategicWaterway | APTGroup | NuclearFacility | EconomicCenter | GammaIrradiator | Pipeline | UnderseaCable | CableAdvisory | RepairShip | InternetOutage | AIDataCenter | AisDisruptionEvent | SocialUnrestEvent;
   relatedNews?: NewsItem[];
   x: number;
   y: number;
@@ -109,6 +109,8 @@ export class MapPopup {
         return this.renderDatacenterPopup(data.data as AIDataCenter);
       case 'ais':
         return this.renderAisPopup(data.data as AisDisruptionEvent);
+      case 'protest':
+        return this.renderProtestPopup(data.data as SocialUnrestEvent);
       default:
         return '';
     }
@@ -382,6 +384,55 @@ export class MapPopup {
           </div>
         </div>
         <p class="popup-description">${event.description}</p>
+      </div>
+    `;
+  }
+
+  private renderProtestPopup(event: SocialUnrestEvent): string {
+    const severityClass = event.severity;
+    const severityLabel = event.severity.toUpperCase();
+    const eventTypeLabel = event.eventType.replace('_', ' ').toUpperCase();
+    const icon = event.eventType === 'riot' ? '🔥' : event.eventType === 'strike' ? '✊' : '📢';
+    const sourceLabel = event.sourceType === 'acled' ? 'ACLED (verified)' : 'GDELT';
+    const validatedBadge = event.validated ? '<span class="popup-badge verified">VERIFIED</span>' : '';
+    const fatalitiesSection = event.fatalities
+      ? `<div class="popup-stat"><span class="stat-label">FATALITIES</span><span class="stat-value alert">${event.fatalities}</span></div>`
+      : '';
+    const actorsSection = event.actors?.length
+      ? `<div class="popup-stat"><span class="stat-label">ACTORS</span><span class="stat-value">${event.actors.join(', ')}</span></div>`
+      : '';
+    const tagsSection = event.tags?.length
+      ? `<div class="popup-tags">${event.tags.map(t => `<span class="popup-tag">${t}</span>`).join('')}</div>`
+      : '';
+    const relatedHotspots = event.relatedHotspots?.length
+      ? `<div class="popup-related">Near: ${event.relatedHotspots.join(', ')}</div>`
+      : '';
+
+    return `
+      <div class="popup-header protest ${severityClass}">
+        <span class="popup-icon">${icon}</span>
+        <span class="popup-title">${eventTypeLabel}</span>
+        <span class="popup-badge ${severityClass}">${severityLabel}</span>
+        ${validatedBadge}
+        <button class="popup-close">×</button>
+      </div>
+      <div class="popup-body">
+        <div class="popup-subtitle">${event.city ? `${event.city}, ` : ''}${event.country}</div>
+        <div class="popup-stats">
+          <div class="popup-stat">
+            <span class="stat-label">TIME</span>
+            <span class="stat-value">${event.time.toLocaleDateString()}</span>
+          </div>
+          <div class="popup-stat">
+            <span class="stat-label">SOURCE</span>
+            <span class="stat-value">${sourceLabel}</span>
+          </div>
+          ${fatalitiesSection}
+          ${actorsSection}
+        </div>
+        ${event.title ? `<p class="popup-description">${event.title}</p>` : ''}
+        ${tagsSection}
+        ${relatedHotspots}
       </div>
     `;
   }

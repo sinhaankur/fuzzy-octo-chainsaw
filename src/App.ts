@@ -10,7 +10,7 @@ import {
   DEFAULT_MAP_LAYERS,
   STORAGE_KEYS,
 } from '@/config';
-import { fetchCategoryFeeds, fetchMultipleStocks, fetchCrypto, fetchPredictions, fetchEarthquakes, fetchWeatherAlerts, fetchFredData, fetchInternetOutages, fetchAisSignals, initAisStream, getAisStatus, fetchCableActivity, initDB, updateBaseline, calculateDeviation, analyzeCorrelations, clusterNews, addToSignalHistory, saveSnapshot, cleanOldSnapshots } from '@/services';
+import { fetchCategoryFeeds, fetchMultipleStocks, fetchCrypto, fetchPredictions, fetchEarthquakes, fetchWeatherAlerts, fetchFredData, fetchInternetOutages, fetchAisSignals, initAisStream, getAisStatus, fetchCableActivity, fetchProtestEvents, getProtestStatus, initDB, updateBaseline, calculateDeviation, analyzeCorrelations, clusterNews, addToSignalHistory, saveSnapshot, cleanOldSnapshots } from '@/services';
 import { buildMapUrl, debounce, loadFromStorage, parseMapUrlState, saveToStorage, ExportPanel } from '@/utils';
 import type { ParsedMapUrlState } from '@/utils';
 import {
@@ -961,6 +961,7 @@ export class App {
       this.loadOutages(),
       this.loadAisSignals(),
       this.loadCableActivity(),
+      this.loadProtests(),
     ]);
 
     // Update search index after all data loads
@@ -1186,6 +1187,29 @@ export class App {
     }
   }
 
+  private async loadProtests(): Promise<void> {
+    try {
+      const protestData = await fetchProtestEvents();
+      this.map?.setProtests(protestData.events);
+      const status = getProtestStatus();
+
+      this.statusPanel?.updateFeed('Protests', {
+        status: 'ok',
+        itemCount: protestData.events.length,
+        errorMessage: !status.acledConfigured ? 'ACLED not configured - using GDELT only' : undefined,
+      });
+
+      if (status.acledConfigured) {
+        this.statusPanel?.updateApi('ACLED', { status: 'ok' });
+      }
+      this.statusPanel?.updateApi('GDELT', { status: 'ok' });
+    } catch (error) {
+      this.statusPanel?.updateFeed('Protests', { status: 'error', errorMessage: String(error) });
+      this.statusPanel?.updateApi('ACLED', { status: 'error' });
+      this.statusPanel?.updateApi('GDELT', { status: 'error' });
+    }
+  }
+
   private async loadFredData(): Promise<void> {
     try {
       this.economicPanel?.setLoading(true);
@@ -1230,5 +1254,6 @@ export class App {
     setInterval(() => this.loadOutages(), 60 * 60 * 1000); // 1 hour - Cloudflare rate limit
     setInterval(() => this.loadAisSignals(), REFRESH_INTERVALS.ais);
     setInterval(() => this.loadCableActivity(), 30 * 60 * 1000);
+    setInterval(() => this.loadProtests(), 15 * 60 * 1000); // 15 min - GDELT updates frequently
   }
 }

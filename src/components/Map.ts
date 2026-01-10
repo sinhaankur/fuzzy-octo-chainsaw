@@ -1,7 +1,7 @@
 import * as d3 from 'd3';
 import * as topojson from 'topojson-client';
 import type { Topology, GeometryCollection } from 'topojson-specification';
-import type { MapLayers, Hotspot, NewsItem, Earthquake, InternetOutage, RelatedAsset, AssetType, AisDisruptionEvent, AisDensityZone, CableAdvisory, RepairShip } from '@/types';
+import type { MapLayers, Hotspot, NewsItem, Earthquake, InternetOutage, RelatedAsset, AssetType, AisDisruptionEvent, AisDensityZone, CableAdvisory, RepairShip, SocialUnrestEvent } from '@/types';
 import type { WeatherAlert } from '@/services/weather';
 import { getSeverityColor } from '@/services/weather';
 import {
@@ -76,6 +76,7 @@ export class MapComponent {
   private aisDensity: AisDensityZone[] = [];
   private cableAdvisories: CableAdvisory[] = [];
   private repairShips: RepairShip[] = [];
+  private protests: SocialUnrestEvent[] = [];
   private news: NewsItem[] = [];
   private popup: MapPopup;
   private onHotspotClick?: (hotspot: Hotspot) => void;
@@ -1182,6 +1183,48 @@ export class MapComponent {
         this.overlays.appendChild(div);
       });
     }
+
+    // Protests / Social Unrest Events
+    if (this.state.layers.protests) {
+      this.protests.forEach((event) => {
+        const pos = projection([event.lon, event.lat]);
+        if (!pos) return;
+
+        const div = document.createElement('div');
+        div.className = `protest-marker ${event.severity} ${event.eventType}`;
+        div.style.left = `${pos[0]}px`;
+        div.style.top = `${pos[1]}px`;
+
+        const icon = document.createElement('div');
+        icon.className = 'protest-icon';
+        icon.textContent = event.eventType === 'riot' ? '🔥' : event.eventType === 'strike' ? '✊' : '📢';
+        div.appendChild(icon);
+
+        if (this.state.zoom >= 4) {
+          const label = document.createElement('div');
+          label.className = 'protest-label';
+          label.textContent = event.city || event.country;
+          div.appendChild(label);
+        }
+
+        if (event.validated) {
+          div.classList.add('validated');
+        }
+
+        div.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const rect = this.container.getBoundingClientRect();
+          this.popup.show({
+            type: 'protest',
+            data: event,
+            x: e.clientX - rect.left,
+            y: e.clientY - rect.top,
+          });
+        });
+
+        this.overlays.appendChild(div);
+      });
+    }
   }
 
   private renderCountryLabels(projection: d3.GeoProjection): void {
@@ -1776,6 +1819,7 @@ export class MapComponent {
     const width = this.container.clientWidth;
     const height = this.container.clientHeight;
     const projection = this.getProjection(width, height);
+    if (!projection.invert) return null;
     const zoom = this.state.zoom;
     const centerX = width / (2 * zoom) - this.state.pan.x;
     const centerY = height / (2 * zoom) - this.state.pan.y;
@@ -1843,6 +1887,11 @@ export class MapComponent {
     this.cableAdvisories = advisories;
     this.repairShips = repairShips;
     this.popup.setCableActivity(advisories, repairShips);
+    this.render();
+  }
+
+  public setProtests(events: SocialUnrestEvent[]): void {
+    this.protests = events;
     this.render();
   }
 

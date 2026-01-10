@@ -329,6 +329,7 @@ export interface MapLayers {
   waterways: boolean;
   outages: boolean;
   datacenters: boolean;
+  protests: boolean;
 }
 
 export interface AIDataCenter {
@@ -395,3 +396,44 @@ export interface AppState {
 }
 
 export type FeedCategory = 'politics' | 'tech' | 'finance' | 'gov' | 'intel';
+
+// Social Unrest / Protest Types
+export type ProtestSeverity = 'low' | 'medium' | 'high';
+export type ProtestSource = 'acled' | 'gdelt' | 'rss';
+export type ProtestEventType = 'protest' | 'riot' | 'strike' | 'demonstration' | 'civil_unrest';
+
+export interface SocialUnrestEvent {
+  id: string;
+  title: string;
+  summary?: string;
+  eventType: ProtestEventType;
+  city?: string;
+  country: string;
+  region?: string;
+  lat: number;
+  lon: number;
+  time: Date;
+  severity: ProtestSeverity;
+  fatalities?: number;
+  sources: string[];
+  sourceType: ProtestSource;
+  tags?: string[];
+  actors?: string[];
+  relatedHotspots?: string[];
+  confidence: 'high' | 'medium' | 'low';
+  validated: boolean;
+  imageUrl?: string;
+  sentiment?: 'angry' | 'peaceful' | 'mixed';
+}
+
+export interface ProtestCluster {
+  id: string;
+  country: string;
+  region?: string;
+  eventCount: number;
+  events: SocialUnrestEvent[];
+  severity: ProtestSeverity;
+  startDate: Date;
+  endDate: Date;
+  primaryCause?: string;
+}

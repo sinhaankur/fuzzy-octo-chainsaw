@@ -330,6 +330,18 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/nga-msi/, ''),
       },
+      // ACLED - Armed Conflict Location & Event Data (protests, riots)
+      '/api/acled': {
+        target: 'https://api.acleddata.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/acled/, ''),
+      },
+      // GDELT GEO 2.0 API - Global event data
+      '/api/gdelt': {
+        target: 'https://api.gdeltproject.org',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/gdelt/, ''),
+      },
     },
   },
 });
