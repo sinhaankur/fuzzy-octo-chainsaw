@@ -10,7 +10,7 @@ import {
   DEFAULT_MAP_LAYERS,
   STORAGE_KEYS,
 } from '@/config';
-import { fetchCategoryFeeds, fetchMultipleStocks, fetchCrypto, fetchPredictions, fetchEarthquakes, fetchWeatherAlerts, fetchFredData, fetchInternetOutages, initDB, updateBaseline, calculateDeviation, analyzeCorrelations, clusterNews, addToSignalHistory, saveSnapshot, cleanOldSnapshots } from '@/services';
+import { fetchCategoryFeeds, fetchMultipleStocks, fetchCrypto, fetchPredictions, fetchEarthquakes, fetchWeatherAlerts, fetchFredData, fetchInternetOutages, fetchCableActivity, initDB, updateBaseline, calculateDeviation, analyzeCorrelations, clusterNews, addToSignalHistory, saveSnapshot, cleanOldSnapshots } from '@/services';
 import { loadFromStorage, saveToStorage, ExportPanel } from '@/utils';
 import {
   MapComponent,
@@ -793,6 +793,7 @@ export class App {
       this.loadWeatherAlerts(),
       this.loadFredData(),
       this.loadOutages(),
+      this.loadCableActivity(),
     ]);
 
     // Update search index after all data loads
@@ -949,6 +950,17 @@ export class App {
     }
   }
 
+  private async loadCableActivity(): Promise<void> {
+    try {
+      const activity = await fetchCableActivity();
+      this.map?.setCableActivity(activity.advisories, activity.repairShips);
+      const itemCount = activity.advisories.length + activity.repairShips.length;
+      this.statusPanel?.updateFeed('CableOps', { status: 'ok', itemCount });
+    } catch {
+      this.statusPanel?.updateFeed('CableOps', { status: 'error' });
+    }
+  }
+
   private async loadFredData(): Promise<void> {
     try {
       this.economicPanel?.setLoading(true);
@@ -991,5 +1003,6 @@ export class App {
     setInterval(() => this.loadWeatherAlerts(), 10 * 60 * 1000);
     setInterval(() => this.loadFredData(), 30 * 60 * 1000);
     setInterval(() => this.loadOutages(), 60 * 60 * 1000); // 1 hour - Cloudflare rate limit
+    setInterval(() => this.loadCableActivity(), 30 * 60 * 1000);
   }
 }
