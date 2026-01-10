@@ -110,6 +110,34 @@ export interface StrategicWaterway {
   description?: string;
 }
 
+export type AisDisruptionType = 'gap_spike' | 'chokepoint_congestion';
+
+export interface AisDisruptionEvent {
+  id: string;
+  name: string;
+  type: AisDisruptionType;
+  lat: number;
+  lon: number;
+  severity: 'low' | 'elevated' | 'high';
+  changePct: number;
+  windowHours: number;
+  darkShips?: number;
+  vesselCount?: number;
+  region?: string;
+  description: string;
+}
+
+export interface AisDensityZone {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  intensity: number;
+  deltaPct: number;
+  shipsPerDay?: number;
+  note?: string;
+}
+
 export interface APTGroup {
   id: string;
   name: string;
@@ -261,6 +289,7 @@ export interface MapLayers {
   cables: boolean;
   pipelines: boolean;
   hotspots: boolean;
+  ais: boolean;
   nuclear: boolean;
   irradiators: boolean;
   sanctions: boolean;

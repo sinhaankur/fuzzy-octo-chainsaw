@@ -10,3 +10,4 @@ export * from './correlation';
 export * from './weather';
 export * from './fred';
 export * from './outages';
+export * from './ais';

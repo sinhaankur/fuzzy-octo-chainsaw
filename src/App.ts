@@ -10,7 +10,7 @@ import {
   DEFAULT_MAP_LAYERS,
   STORAGE_KEYS,
 } from '@/config';
-import { fetchCategoryFeeds, fetchMultipleStocks, fetchCrypto, fetchPredictions, fetchEarthquakes, fetchWeatherAlerts, fetchFredData, fetchInternetOutages, initDB, updateBaseline, calculateDeviation, analyzeCorrelations, clusterNews, addToSignalHistory, saveSnapshot, cleanOldSnapshots } from '@/services';
+import { fetchCategoryFeeds, fetchMultipleStocks, fetchCrypto, fetchPredictions, fetchEarthquakes, fetchWeatherAlerts, fetchFredData, fetchInternetOutages, fetchAisSignals, initAisStream, getAisStatus, initDB, updateBaseline, calculateDeviation, analyzeCorrelations, clusterNews, addToSignalHistory, saveSnapshot, cleanOldSnapshots } from '@/services';
 import { buildMapUrl, debounce, loadFromStorage, parseMapUrlState, saveToStorage, ExportPanel } from '@/utils';
 import type { ParsedMapUrlState } from '@/utils';
 import {
@@ -76,6 +76,7 @@ export class App {
 
   public async init(): Promise<void> {
     await initDB();
+    initAisStream(); // Connect to aisstream.io for live vessel tracking
     this.renderLayout();
     this.signalModal = new SignalModal();
     this.setupPlaybackControl();
@@ -958,6 +959,7 @@ export class App {
       this.loadWeatherAlerts(),
       this.loadFredData(),
       this.loadOutages(),
+      this.loadAisSignals(),
     ]);
 
     // Update search index after all data loads
@@ -1144,6 +1146,35 @@ export class App {
     }
   }
 
+  private async loadAisSignals(): Promise<void> {
+    try {
+      const { disruptions, density } = await fetchAisSignals();
+      const aisStatus = getAisStatus();
+      this.map?.setAisData(disruptions, density);
+
+      if (aisStatus.connected) {
+        this.statusPanel?.updateFeed('AIS', {
+          status: 'ok',
+          itemCount: disruptions.length + density.length,
+        });
+        this.statusPanel?.updateApi('AISStream', { status: 'ok' });
+      } else {
+        // Not connected but no error - likely no API key
+        this.statusPanel?.updateFeed('AIS', {
+          status: aisStatus.vessels > 0 ? 'ok' : 'error',
+          itemCount: disruptions.length + density.length,
+          errorMessage: aisStatus.vessels === 0 ? 'No API key - set VITE_AISSTREAM_API_KEY' : undefined,
+        });
+        this.statusPanel?.updateApi('AISStream', {
+          status: aisStatus.vessels > 0 ? 'ok' : 'error',
+        });
+      }
+    } catch (error) {
+      this.statusPanel?.updateFeed('AIS', { status: 'error', errorMessage: String(error) });
+      this.statusPanel?.updateApi('AISStream', { status: 'error' });
+    }
+  }
+
   private async loadFredData(): Promise<void> {
     try {
       this.economicPanel?.setLoading(true);
@@ -1186,5 +1217,6 @@ export class App {
     setInterval(() => this.loadWeatherAlerts(), 10 * 60 * 1000);
     setInterval(() => this.loadFredData(), 30 * 60 * 1000);
     setInterval(() => this.loadOutages(), 60 * 60 * 1000); // 1 hour - Cloudflare rate limit
+    setInterval(() => this.loadAisSignals(), REFRESH_INTERVALS.ais);
   }
 }
