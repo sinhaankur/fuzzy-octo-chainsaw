@@ -13,7 +13,6 @@ export const API_URLS = {
     '/api/coingecko/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true',
   polymarket: '/api/polymarket/events?closed=false&limit=20',
   earthquakes: '/api/earthquake/earthquakes/feed/v1.0/summary/4.5_day.geojson',
-  aisSignals: '/api/ais/signals',
 };
 
 export const REFRESH_INTERVALS = {

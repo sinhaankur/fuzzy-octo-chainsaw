@@ -10,7 +10,7 @@ import {
   DEFAULT_MAP_LAYERS,
   STORAGE_KEYS,
 } from '@/config';
-import { fetchCategoryFeeds, fetchMultipleStocks, fetchCrypto, fetchPredictions, fetchEarthquakes, fetchWeatherAlerts, fetchFredData, fetchInternetOutages, fetchAisSignals, initDB, updateBaseline, calculateDeviation, analyzeCorrelations, clusterNews, addToSignalHistory, saveSnapshot, cleanOldSnapshots } from '@/services';
+import { fetchCategoryFeeds, fetchMultipleStocks, fetchCrypto, fetchPredictions, fetchEarthquakes, fetchWeatherAlerts, fetchFredData, fetchInternetOutages, fetchAisSignals, initAisStream, getAisStatus, initDB, updateBaseline, calculateDeviation, analyzeCorrelations, clusterNews, addToSignalHistory, saveSnapshot, cleanOldSnapshots } from '@/services';
 import { loadFromStorage, saveToStorage, ExportPanel } from '@/utils';
 import {
   MapComponent,
@@ -71,6 +71,7 @@ export class App {
 
   public async init(): Promise<void> {
     await initDB();
+    initAisStream(); // Connect to aisstream.io for live vessel tracking
     this.renderLayout();
     this.signalModal = new SignalModal();
     this.setupPlaybackControl();
@@ -954,12 +955,29 @@ export class App {
   private async loadAisSignals(): Promise<void> {
     try {
       const { disruptions, density } = await fetchAisSignals();
+      const aisStatus = getAisStatus();
       this.map?.setAisData(disruptions, density);
-      this.statusPanel?.updateFeed('AIS', { status: 'ok', itemCount: disruptions.length + density.length });
-      this.statusPanel?.updateApi('AIS', { status: 'ok' });
+
+      if (aisStatus.connected) {
+        this.statusPanel?.updateFeed('AIS', {
+          status: 'ok',
+          itemCount: disruptions.length + density.length,
+        });
+        this.statusPanel?.updateApi('AISStream', { status: 'ok' });
+      } else {
+        // Not connected but no error - likely no API key
+        this.statusPanel?.updateFeed('AIS', {
+          status: aisStatus.vessels > 0 ? 'ok' : 'error',
+          itemCount: disruptions.length + density.length,
+          errorMessage: aisStatus.vessels === 0 ? 'No API key - set VITE_AISSTREAM_API_KEY' : undefined,
+        });
+        this.statusPanel?.updateApi('AISStream', {
+          status: aisStatus.vessels > 0 ? 'ok' : 'error',
+        });
+      }
     } catch (error) {
       this.statusPanel?.updateFeed('AIS', { status: 'error', errorMessage: String(error) });
-      this.statusPanel?.updateApi('AIS', { status: 'error' });
+      this.statusPanel?.updateApi('AISStream', { status: 'error' });
     }
   }
 
