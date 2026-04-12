@@ -333,6 +333,16 @@ export class EventHandlerManager implements AppModule {
 
     document.getElementById('connectAiBtn')?.addEventListener('click', () => {
       this.ctx.unifiedSettings?.open('settings');
+      // Guide user directly into Local AI quick-connect controls.
+      window.setTimeout(() => {
+        const autoDetectBtn = document.getElementById('usLocalAiAutoDetect') as HTMLButtonElement | null;
+        if (autoDetectBtn) {
+          autoDetectBtn.focus();
+          return;
+        }
+        const urlInput = document.getElementById('usLocalAiUrl') as HTMLInputElement | null;
+        urlInput?.focus();
+      }, 0);
     });
 
     // Listen for stock selection events from StockMonitorPanel

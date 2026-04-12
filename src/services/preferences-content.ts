@@ -29,6 +29,8 @@ import {
 import { getCurrentClerkUser } from '@/services/clerk';
 import { hasTier } from '@/services/entitlements';
 import { SITE_VARIANT } from '@/config/variant';
+import { fetchOllamaModels } from '@/services/ollama-models';
+import { getRuntimeConfigSnapshot, isFeatureEnabled, setFeatureToggle, setSecretValue } from '@/services/runtime-config';
 // When VITE_QUIET_HOURS_BATCH_ENABLED=0 the relay does not honour batch_on_wake.
 // Hide that option so users cannot select a mode that silently behaves as critical_only.
 const QUIET_HOURS_BATCH_ENABLED = import.meta.env.VITE_QUIET_HOURS_BATCH_ENABLED !== '0';
@@ -46,6 +48,94 @@ import {
 } from '@/services/analysis-framework-store';
 
 const DESKTOP_RELEASES_URL = 'https://github.com/koala73/worldmonitor/releases';
+
+type LocalAiProviderPreset = 'ollama' | 'lmstudio' | 'openai';
+
+function makeTimeout(ms: number): AbortSignal {
+  if (typeof AbortSignal.timeout === 'function') return AbortSignal.timeout(ms);
+  const ctrl = new AbortController();
+  setTimeout(() => ctrl.abort(), ms);
+  return ctrl.signal;
+}
+
+function normalizeLocalAiUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const withProto = /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(trimmed) ? trimmed : `http://${trimmed}`;
+  try {
+    const parsed = new URL(withProto);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+    parsed.hash = '';
+    parsed.search = '';
+    const cleanPath = parsed.pathname.replace(/\/+$/, '');
+    parsed.pathname = cleanPath || '/';
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return null;
+  }
+}
+
+function isLikelyIpAddress(host: string): boolean {
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host);
+}
+
+function buildLocalAiCandidates(): string[] {
+  const hosts = ['127.0.0.1', 'localhost', 'host.docker.internal'];
+  if (typeof window !== 'undefined' && isLikelyIpAddress(window.location.hostname)) {
+    hosts.push(window.location.hostname);
+  }
+  const candidates = hosts.flatMap((host) => [
+    `http://${host}:11434`,
+    `http://${host}:1234/v1`,
+    `http://${host}:8080/v1`,
+  ]);
+  return [...new Set(candidates)];
+}
+
+async function probeLocalAiEndpoint(baseUrl: string): Promise<{ reachable: boolean; models: string[] }> {
+  const models = await fetchOllamaModels(baseUrl);
+  if (models.length > 0) {
+    return { reachable: true, models };
+  }
+
+  const probes = ['/v1/models', '/api/tags'];
+  for (const path of probes) {
+    try {
+      const response = await fetch(new URL(path, baseUrl).toString(), {
+        signal: makeTimeout(3500),
+      });
+      if (response.ok) {
+        return { reachable: true, models: [] };
+      }
+    } catch {
+      // Try next probe.
+    }
+  }
+
+  return { reachable: false, models: [] };
+}
+
+function buildLocalAiUrlFromHostPort(host: string, port: string, provider: LocalAiProviderPreset): string {
+  const normalizedHost = host.trim() || '127.0.0.1';
+  const normalizedPort = (port.trim() || (provider === 'ollama' ? '11434' : provider === 'lmstudio' ? '1234' : '8080'));
+  const base = `http://${normalizedHost}:${normalizedPort}`;
+  return provider === 'ollama' ? base : `${base}/v1`;
+}
+
+function populateLocalAiModelOptions(select: HTMLSelectElement, models: string[], selected = ''): void {
+  const unique = [...new Set(models.filter(Boolean))];
+  if (unique.length === 0) {
+    const keep = selected.trim();
+    select.innerHTML = keep
+      ? `<option value="${escapeHtml(keep)}" selected>${escapeHtml(keep)}</option>`
+      : '<option value="" selected>Model auto-detected on connect</option>';
+    return;
+  }
+  const target = selected && unique.includes(selected) ? selected : unique[0]!;
+  select.innerHTML = unique
+    .map((name) => `<option value="${escapeHtml(name)}" ${name === target ? 'selected' : ''}>${escapeHtml(name)}</option>`)
+    .join('');
+}
 
 export interface PreferencesHost {
   isDesktopApp: boolean;
@@ -213,7 +303,7 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
   html += `</div></details>`;
 
   // ── Intelligence group ──
-  html += `<details class="wm-pref-group">`;
+  html += `<details class="wm-pref-group" open>`;
   html += `<summary>${t('preferences.intelligence')}</summary>`;
   html += `<div class="wm-pref-group-content">`;
 
@@ -226,6 +316,53 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
         <div class="ai-flow-cta-title">${t('components.insights.aiFlowOllamaCta')}</div>
         <div class="ai-flow-cta-desc">${t('components.insights.aiFlowOllamaCtaDesc')}</div>
         <a href="${DESKTOP_RELEASES_URL}" target="_blank" rel="noopener noreferrer" class="ai-flow-cta-link">${t('components.insights.aiFlowDownloadDesktop')}</a>
+      </div>
+    `;
+  } else {
+    const runtimeSnapshot = getRuntimeConfigSnapshot();
+    const configuredUrl = runtimeSnapshot.secrets.OLLAMA_API_URL?.value || '';
+    const configuredModel = runtimeSnapshot.secrets.OLLAMA_MODEL?.value || '';
+    const ollamaEnabled = isFeatureEnabled('aiOllama');
+    html += `
+      <div class="local-ai-quick-connect">
+        <div class="local-ai-quick-connect-title">Connect Local AI</div>
+        <div class="local-ai-quick-connect-desc">Auto-detect local Ollama, LM Studio, or Podman endpoints. You can also enter your local IP and port manually.</div>
+        <div class="local-ai-status-row">
+          <span class="local-ai-status-pill ${configuredUrl ? 'connected' : 'idle'}">${configuredUrl ? 'Configured' : 'Not configured'}</span>
+          <span class="local-ai-status-text" id="usLocalAiStatusText">${configuredUrl ? escapeHtml(configuredUrl) : 'Click Auto Detect to find a running local AI endpoint.'}</span>
+        </div>
+        <div class="local-ai-action-row">
+          <button type="button" class="settings-btn settings-btn-primary" id="usLocalAiAutoDetect">Auto Detect</button>
+          <button type="button" class="settings-btn settings-btn-secondary" id="usLocalAiLoadModels" ${configuredUrl ? '' : 'disabled'}>Load Models</button>
+        </div>
+        <div class="local-ai-presets" role="group" aria-label="Local AI presets">
+          <button type="button" class="settings-btn settings-btn-secondary" data-local-ai-preset="http://127.0.0.1:11434">Ollama</button>
+          <button type="button" class="settings-btn settings-btn-secondary" data-local-ai-preset="http://127.0.0.1:1234/v1">LM Studio</button>
+          <button type="button" class="settings-btn settings-btn-secondary" data-local-ai-preset="http://127.0.0.1:8080/v1">Podman / OpenAI</button>
+        </div>
+        <div class="local-ai-url-row">
+          <input type="text" id="usLocalAiUrl" class="unified-settings-input" value="${escapeHtml(configuredUrl)}" placeholder="http://127.0.0.1:11434 or http://192.168.1.24:1234/v1" autocomplete="off">
+          <button type="button" class="settings-btn settings-btn-secondary" id="usLocalAiSaveUrl">Save URL</button>
+        </div>
+        <div class="local-ai-host-row">
+          <input type="text" id="usLocalAiHost" class="unified-settings-input" placeholder="Local IP or host (127.0.0.1)">
+          <input type="text" id="usLocalAiPort" class="unified-settings-input local-ai-port" placeholder="Port">
+          <select id="usLocalAiProvider" class="unified-settings-select local-ai-provider">
+            <option value="ollama">Ollama</option>
+            <option value="lmstudio">LM Studio</option>
+            <option value="openai">OpenAI compatible</option>
+          </select>
+          <button type="button" class="settings-btn settings-btn-secondary" id="usLocalAiApplyHostPort">Apply IP + Port</button>
+        </div>
+        <div class="local-ai-model-row">
+          <label for="usLocalAiModel" class="ai-flow-toggle-desc">Model</label>
+          <select id="usLocalAiModel" class="unified-settings-select">
+            ${configuredModel
+              ? `<option value="${escapeHtml(configuredModel)}" selected>${escapeHtml(configuredModel)}</option>`
+              : '<option value="" selected>Model auto-detected on connect</option>'}
+          </select>
+        </div>
+        <div class="local-ai-footer-note">AI local endpoint is ${ollamaEnabled ? 'enabled' : 'disabled'} for summarization. Saving a URL will enable it automatically.</div>
       </div>
     `;
   }
@@ -459,8 +596,59 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
         }
       }, { signal });
 
-      container.addEventListener('click', (e) => {
+      container.addEventListener('click', async (e) => {
         const target = e.target as HTMLElement;
+        const setLocalAiStatus = (message: string, state: 'idle' | 'ok' | 'warn' = 'idle'): void => {
+          const statusText = container.querySelector<HTMLElement>('#usLocalAiStatusText');
+          if (statusText) {
+            statusText.textContent = message;
+            statusText.classList.toggle('warn', state === 'warn');
+          }
+          const pill = container.querySelector<HTMLElement>('.local-ai-status-pill');
+          if (pill) {
+            pill.classList.remove('idle', 'connected');
+            if (state === 'ok') pill.classList.add('connected');
+            else pill.classList.add('idle');
+            pill.textContent = state === 'ok' ? 'Connected' : state === 'warn' ? 'Not found' : 'Connecting...';
+          }
+        };
+
+        const saveLocalAiUrl = async (rawUrl: string, modelOverride = ''): Promise<void> => {
+          const normalized = normalizeLocalAiUrl(rawUrl);
+          if (!normalized) {
+            setLocalAiStatus('Invalid local AI URL. Example: http://127.0.0.1:11434', 'warn');
+            return;
+          }
+          setLocalAiStatus(`Connecting to ${normalized}...`, 'idle');
+          const probe = await probeLocalAiEndpoint(normalized);
+          if (!probe.reachable) {
+            setLocalAiStatus(`Could not reach ${normalized}. Check IP/port and that your local AI server is running.`, 'warn');
+            return;
+          }
+
+          const modelSelect = container.querySelector<HTMLSelectElement>('#usLocalAiModel');
+          const selectedModel = modelOverride.trim() || modelSelect?.value.trim() || probe.models[0] || '';
+
+          await setSecretValue('OLLAMA_API_URL', normalized);
+          if (selectedModel) {
+            await setSecretValue('OLLAMA_MODEL', selectedModel);
+          }
+          setFeatureToggle('aiOllama', true);
+
+          const localAiUrlInput = container.querySelector<HTMLInputElement>('#usLocalAiUrl');
+          if (localAiUrlInput) localAiUrlInput.value = normalized;
+          if (modelSelect) populateLocalAiModelOptions(modelSelect, probe.models, selectedModel);
+          const loadModelsBtn = container.querySelector<HTMLButtonElement>('#usLocalAiLoadModels');
+          if (loadModelsBtn) loadModelsBtn.disabled = false;
+
+          setLocalAiStatus(
+            selectedModel
+              ? `Connected: ${normalized} (${selectedModel})`
+              : `Connected: ${normalized}`,
+            'ok',
+          );
+        };
+
         if (target.closest('#usExportBtn')) {
           try {
             exportSettings();
@@ -472,6 +660,80 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
         }
         if (target.closest('#usImportBtn')) {
           container.querySelector<HTMLInputElement>('#usImportInput')?.click();
+          return;
+        }
+
+        if (target.closest('#usLocalAiAutoDetect')) {
+          const btn = container.querySelector<HTMLButtonElement>('#usLocalAiAutoDetect');
+          if (btn) btn.disabled = true;
+          setLocalAiStatus('Scanning local endpoints (Ollama, LM Studio, Podman)...', 'idle');
+          const candidates = buildLocalAiCandidates();
+          try {
+            let detected: { url: string; models: string[] } | null = null;
+            for (const candidate of candidates) {
+              const probe = await probeLocalAiEndpoint(candidate);
+              if (probe.reachable) {
+                detected = { url: candidate, models: probe.models };
+                if (probe.models.length > 0) break;
+              }
+            }
+            if (!detected) {
+              setLocalAiStatus('No local AI endpoint detected. Try entering local IP + port manually.', 'warn');
+              return;
+            }
+            await saveLocalAiUrl(detected.url, detected.models[0] || '');
+          } catch (error) {
+            console.warn('[preferences] local AI auto-detect failed', error);
+            setLocalAiStatus('Auto-detect failed. Use presets or local IP + port.', 'warn');
+          } finally {
+            if (btn) btn.disabled = false;
+          }
+          return;
+        }
+
+        if (target.closest('#usLocalAiLoadModels')) {
+          const urlInput = container.querySelector<HTMLInputElement>('#usLocalAiUrl');
+          const modelSelect = container.querySelector<HTMLSelectElement>('#usLocalAiModel');
+          const url = normalizeLocalAiUrl(urlInput?.value || '');
+          if (!url || !modelSelect) {
+            setLocalAiStatus('Set a valid local AI URL first.', 'warn');
+            return;
+          }
+          setLocalAiStatus(`Loading models from ${url}...`, 'idle');
+          const models = await fetchOllamaModels(url);
+          populateLocalAiModelOptions(modelSelect, models, modelSelect.value || '');
+          if (models.length === 0) {
+            setLocalAiStatus('Endpoint reachable but no models found. Load a model in your local AI server first.', 'warn');
+          } else {
+            setLocalAiStatus(`Loaded ${models.length} model${models.length === 1 ? '' : 's'} from ${url}.`, 'ok');
+          }
+          return;
+        }
+
+        const presetBtn = target.closest<HTMLButtonElement>('[data-local-ai-preset]');
+        if (presetBtn?.dataset.localAiPreset) {
+          const urlInput = container.querySelector<HTMLInputElement>('#usLocalAiUrl');
+          if (urlInput) urlInput.value = presetBtn.dataset.localAiPreset;
+          setLocalAiStatus(`Preset selected: ${presetBtn.dataset.localAiPreset}`, 'idle');
+          return;
+        }
+
+        if (target.closest('#usLocalAiApplyHostPort')) {
+          const hostInput = container.querySelector<HTMLInputElement>('#usLocalAiHost');
+          const portInput = container.querySelector<HTMLInputElement>('#usLocalAiPort');
+          const providerSelect = container.querySelector<HTMLSelectElement>('#usLocalAiProvider');
+          const urlInput = container.querySelector<HTMLInputElement>('#usLocalAiUrl');
+          const provider = (providerSelect?.value || 'ollama') as LocalAiProviderPreset;
+          const built = buildLocalAiUrlFromHostPort(hostInput?.value || '', portInput?.value || '', provider);
+          if (urlInput) urlInput.value = built;
+          setLocalAiStatus(`Prepared URL: ${built}`, 'idle');
+          return;
+        }
+
+        if (target.closest('#usLocalAiSaveUrl')) {
+          const urlInput = container.querySelector<HTMLInputElement>('#usLocalAiUrl');
+          if (!urlInput) return;
+          void saveLocalAiUrl(urlInput.value);
           return;
         }
 

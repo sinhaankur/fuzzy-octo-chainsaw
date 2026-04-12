@@ -79,6 +79,7 @@ describe('Legacy api/*.js endpoint allowlist', () => {
     'download.js',
     'fwdstart.js',
     'geo.js',
+    'google-finance.js',
     'gpsjam.js',
     'health.js',
     'military-flights.js',
