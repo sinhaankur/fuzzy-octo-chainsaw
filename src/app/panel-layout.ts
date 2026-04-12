@@ -9,6 +9,8 @@ import {
   MapContainer,
   NewsPanel,
   MarketPanel,
+  StockMonitorPanel,
+  StockGlobalIntelligencePanel,
   StockAnalysisPanel,
   StockBacktestPanel,
   HeatmapPanel,
@@ -94,31 +96,16 @@ import { CustomWidgetPanel } from '@/components/CustomWidgetPanel';
 import { openWidgetChatModal } from '@/components/WidgetChatModal';
 import { loadWidgets, saveWidget } from '@/services/widget-store';
 import type { CustomWidgetSpec } from '@/services/widget-store';
-import { initEntitlementSubscription, destroyEntitlementSubscription, isEntitled, onEntitlementChange } from '@/services/entitlements';
-import { initSubscriptionWatch, destroySubscriptionWatch } from '@/services/billing';
-import { getUserId } from '@/services/user-identity';
-import { initPaymentFailureBanner } from '@/components/payment-failure-banner';
-import { handleCheckoutReturn } from '@/services/checkout-return';
-import { initCheckoutOverlay, destroyCheckoutOverlay, showCheckoutSuccess } from '@/services/checkout';
 import { McpDataPanel } from '@/components/McpDataPanel';
-import { openMcpConnectModal } from '@/components/McpConnectModal';
 import { loadMcpPanels, saveMcpPanel } from '@/services/mcp-store';
 import type { McpPanelSpec } from '@/services/mcp-store';
 import { getAuthState, subscribeAuthState } from '@/services/auth-state';
 import type { AuthSession } from '@/services/auth-state';
-import { PanelGateReason, getPanelGateReason, hasPremiumAccess } from '@/services/panel-gating';
-import type { Panel } from '@/components/Panel';
 
-/** Panels that require premium access on web. Auth-based gating applies to these. */
-const WEB_PREMIUM_PANELS = new Set([
-  'stock-analysis',
-  'stock-backtest',
-  'daily-market-brief',
-  'market-implications',
-  'deduction',
-  'chat-analyst',
-  'wsb-ticker-scanner',
-]);
+const DISPLAY_VERSION = '0.1';
+const DISPLAY_HANDLE = '@sinhaankur';
+const DISPLAY_X_URL = 'https://x.com/sinhaankur';
+const DISPLAY_GITHUB_URL = 'https://github.com/sinhaankur';
 
 export interface PanelLayoutManagerCallbacks {
   openCountryStory: (code: string, name: string) => void;
@@ -138,10 +125,8 @@ export class PanelLayoutManager implements AppModule {
   private aviationCommandBar: AviationCommandBar | null = null;
   private readonly applyTimeRangeFilterDebounced: (() => void) & { cancel(): void };
   private unsubscribeAuth: (() => void) | null = null;
-  private proBlockUnsubscribe: (() => void) | null = null;
   private boundWidgetCreatorHandler: ((e: Event) => void) | null = null;
-  private unsubscribeEntitlementChange: (() => void) | null = null;
-  private unsubscribePaymentFailureBanner: (() => void) | null = null;
+  private boundStockFocusHandler: ((e: Event) => void) | null = null;
 
   constructor(ctx: AppContext, callbacks: PanelLayoutManagerCallbacks) {
     this.ctx = ctx;
@@ -149,49 +134,15 @@ export class PanelLayoutManager implements AppModule {
     this.applyTimeRangeFilterDebounced = debounce(() => {
       this.applyTimeRangeFilterToNewsPanels();
     }, 120);
-
-    // Dodo Payments: entitlement subscription + billing watch for ALL users.
-    // Free users need the subscription active so they receive real-time
-    // entitlement updates after purchasing (P1: newly upgraded users must
-    // see their premium access without a manual page reload).
-    if (handleCheckoutReturn()) {
-      showCheckoutSuccess();
-    }
-
-    const userId = getUserId();
-    if (userId) {
-      initEntitlementSubscription(userId).catch(() => {});
-      initSubscriptionWatch(userId).catch(() => {});
-      this.unsubscribePaymentFailureBanner = initPaymentFailureBanner();
-    }
-
-    initCheckoutOverlay(() => showCheckoutSuccess());
-
-    // Listen for entitlement changes — reload panels to pick up new gating state.
-    // Skip the initial snapshot to avoid a reload loop for users who already have
-    // premium via legacy signals (API key / wm-pro-key).
-    let skipInitialSnapshot = true;
-    this.unsubscribeEntitlementChange = onEntitlementChange(() => {
-      if (skipInitialSnapshot) {
-        skipInitialSnapshot = false;
-        return;
-      }
-      if (isEntitled()) {
-        console.log('[entitlements] Subscription activated — reloading to unlock panels');
-        window.location.reload();
-      }
-    });
   }
 
   init(): void {
     this.renderLayout();
 
-    // Subscribe to auth state for reactive panel gating on web
-    this.unsubscribeAuth = subscribeAuthState((state) => {
-      this.updatePanelGating(state);
+    // Subscribe to auth state for reactive UI updates.
+    this.unsubscribeAuth = subscribeAuthState((_state) => {
+      // Auth state changes handled by individual components
     });
-    this.fetchGitHubStars();
-
     // Handle analyst action chip "Create chart widget →" click
     this.boundWidgetCreatorHandler = ((e: CustomEvent<{ initialMessage?: string }>) => {
       openWidgetChatModal({
@@ -202,6 +153,10 @@ export class PanelLayoutManager implements AppModule {
       });
     }) as EventListener;
     this.ctx.container.addEventListener('wm:open-widget-creator', this.boundWidgetCreatorHandler);
+    this.boundStockFocusHandler = ((e: CustomEvent<{ lat: number; lon: number; zoom?: number }>) => {
+      this.ctx.map?.setCenter(e.detail.lat, e.detail.lon, e.detail.zoom ?? 4);
+    }) as EventListener;
+    window.addEventListener('wm:focus-stock-location', this.boundStockFocusHandler);
   }
 
   destroy(): void {
@@ -209,11 +164,13 @@ export class PanelLayoutManager implements AppModule {
     this.applyTimeRangeFilterDebounced.cancel();
     this.unsubscribeAuth?.();
     this.unsubscribeAuth = null;
-    this.proBlockUnsubscribe?.();
-    this.proBlockUnsubscribe = null;
     if (this.boundWidgetCreatorHandler) {
       this.ctx.container.removeEventListener('wm:open-widget-creator', this.boundWidgetCreatorHandler);
       this.boundWidgetCreatorHandler = null;
+    }
+    if (this.boundStockFocusHandler) {
+      window.removeEventListener('wm:focus-stock-location', this.boundStockFocusHandler);
+      this.boundStockFocusHandler = null;
     }
     this.panelDragCleanupHandlers.forEach((cleanup) => cleanup());
     this.panelDragCleanupHandlers = [];
@@ -237,67 +194,12 @@ export class PanelLayoutManager implements AppModule {
     this.aviationCommandBar = null;
     this.ctx.panels['airline-intel']?.destroy();
 
-    // Clean up billing subscription watch + entitlement subscription
-    destroySubscriptionWatch();
-    destroyEntitlementSubscription();
-
-    // Clean up entitlement change listener
-    this.unsubscribeEntitlementChange?.();
-    this.unsubscribeEntitlementChange = null;
-
-    // Clean up payment failure banner subscription
-    this.unsubscribePaymentFailureBanner?.();
-    this.unsubscribePaymentFailureBanner = null;
-
-    // Reset checkout overlay so next layout init can register its callback
-    destroyCheckoutOverlay();
-
     window.removeEventListener('resize', this.ensureCorrectZones);
   }
 
-  /** Reactively update premium panel gating based on auth state. */
-  private updatePanelGating(state: AuthSession): void {
-    for (const [key, panel] of Object.entries(this.ctx.panels)) {
-      const isPremium = WEB_PREMIUM_PANELS.has(key);
-      const reason = getPanelGateReason(state, isPremium);
-
-      if (reason === PanelGateReason.NONE) {
-        // User has access -- unlock if previously locked
-        (panel as Panel).unlockPanel();
-      } else {
-        // User does NOT have access -- show appropriate CTA
-        const onAction = this.getGateAction(reason);
-        (panel as Panel).showGatedCta(reason, onAction);
-      }
-    }
-  }
-
-  /** Return the action callback for a given gate reason. */
-  private getGateAction(reason: PanelGateReason): () => void {
-    switch (reason) {
-      case PanelGateReason.ANONYMOUS:
-        return () => this.ctx.authModal?.open();
-      case PanelGateReason.FREE_TIER:
-        return () => window.open('https://worldmonitor.app/pro', '_blank');
-      default:
-        return () => {};
-    }
-  }
-
-  private async fetchGitHubStars(): Promise<void> {
-    try {
-      const response = await fetch('https://api.github.com/repos/koala73/worldmonitor');
-      if (!response.ok) return;
-      const data = await response.json();
-      const starsEl = document.getElementById('githubStars');
-      if (starsEl) {
-        const count = data.stargazers_count;
-        const k = Math.round(count / 1000);
-        starsEl.textContent = `${k}k`;
-      }
-    } catch (e) {
-      // ignore errors
-    }
+  /** Unlock all panels unconditionally. */
+  private updatePanelGating(_state: AuthSession): void {
+    // No pro gating — all panels are available
   }
 
   renderLayout(): void {
@@ -359,14 +261,14 @@ export class PanelLayoutManager implements AppModule {
               <span class="variant-label">Good News</span>
             </a>`;
       })()}</div>
-          <span class="logo">MONITOR</span><span class="logo-mobile">World Monitor</span><span class="version">v${__APP_VERSION__}</span>${BETA_MODE ? '<span class="beta-badge">BETA</span>' : ''}
-          <a href="https://x.com/eliehabib" target="_blank" rel="noopener" class="credit-link">
+          <span class="logo">STOCKMONITOR</span><span class="logo-mobile">StockMonitor App</span><span class="version">v${DISPLAY_VERSION}</span>${BETA_MODE ? '<span class="beta-badge">BETA</span>' : ''}
+          <a href="${DISPLAY_X_URL}" target="_blank" rel="noopener" class="credit-link">
             <svg class="x-logo" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
-            <span class="credit-text">@eliehabib</span>
+            <span class="credit-text">${DISPLAY_HANDLE}</span>
           </a>
-          <a href="https://github.com/koala73/worldmonitor" target="_blank" rel="noopener" class="github-link" title="${t('header.viewOnGitHub')}">
+          <a href="${DISPLAY_GITHUB_URL}" target="_blank" rel="noopener" class="github-link" title="${t('header.viewOnGitHub')}">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-            <span class="github-stars" id="githubStars"></span>
+            <span class="github-stars">GitHub</span>
           </a>
           <button class="mobile-settings-btn" id="mobileSettingsBtn" title="${t('header.settings')}">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -393,6 +295,7 @@ export class PanelLayoutManager implements AppModule {
         </div>
         <div class="header-right">
           <button class="search-btn" id="searchBtn"><kbd>⌘K</kbd> ${t('header.search')}</button>
+          <button class="connect-ai-btn" id="connectAiBtn" title="Connect local LLM (Ollama / LM Studio)">⚡ Connect AI</button>
           ${this.ctx.isDesktopApp ? '' : `<button class="copy-link-btn" id="copyLinkBtn">${t('header.copyLink')}</button>`}
           ${this.ctx.isDesktopApp ? '' : `<button class="fullscreen-btn" id="fullscreenBtn" title="${t('header.fullscreen')}">⛶</button>`}
           ${SITE_VARIANT === 'happy' ? `<button class="tv-mode-btn" id="tvModeBtn" title="TV Mode (Shift+T)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></button>` : ''}
@@ -403,7 +306,7 @@ export class PanelLayoutManager implements AppModule {
       <div class="mobile-menu-overlay" id="mobileMenuOverlay"></div>
       <nav class="mobile-menu" id="mobileMenu">
         <div class="mobile-menu-header">
-          <span class="mobile-menu-title">WORLD MONITOR</span>
+          <span class="mobile-menu-title">STOCKMONITOR APP</span>
           <button class="mobile-menu-close" id="mobileMenuClose" aria-label="Close menu">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
@@ -440,18 +343,12 @@ export class PanelLayoutManager implements AppModule {
           <span class="mobile-menu-item-icon">${getCurrentTheme() === 'dark' ? '☀️' : '🌙'}</span>
           <span class="mobile-menu-item-label">${getCurrentTheme() === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
         </button>
-        <a class="mobile-menu-item" href="https://x.com/eliehabib" target="_blank" rel="noopener">
+        <a class="mobile-menu-item" href="${DISPLAY_X_URL}" target="_blank" rel="noopener">
           <span class="mobile-menu-item-icon"><svg class="x-logo" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></span>
-          <span class="mobile-menu-item-label">@eliehabib</span>
+          <span class="mobile-menu-item-label">${DISPLAY_HANDLE}</span>
         </a>
         <div class="mobile-menu-divider"></div>
-        <div class="mobile-menu-footer-links">
-          <a href="${this.ctx.isDesktopApp ? 'https://worldmonitor.app/pro' : 'https://www.worldmonitor.app/pro'}" target="_blank" rel="noopener">Pro</a>
-          <a href="${this.ctx.isDesktopApp ? 'https://worldmonitor.app/blog/' : 'https://www.worldmonitor.app/blog/'}" target="_blank" rel="noopener">Blog</a>
-          <a href="${this.ctx.isDesktopApp ? 'https://worldmonitor.app/docs' : 'https://www.worldmonitor.app/docs'}" target="_blank" rel="noopener">Docs</a>
-          <a href="https://status.worldmonitor.app/" target="_blank" rel="noopener">Status</a>
-        </div>
-        <div class="mobile-menu-version">v${__APP_VERSION__}</div>
+        <div class="mobile-menu-version">v${DISPLAY_VERSION}</div>
       </nav>
       <div class="region-sheet-backdrop" id="regionSheetBackdrop"></div>
       <div class="region-bottom-sheet" id="regionBottomSheet">
@@ -504,26 +401,7 @@ export class PanelLayoutManager implements AppModule {
         <div class="panels-grid" id="panelsGrid"></div>
         <button class="search-mobile-fab" id="searchMobileFab" aria-label="Search">\u{1F50D}</button>
       </div>
-      <footer class="site-footer">
-        <div class="site-footer-brand">
-          <img src="/favico/favicon-32x32.png" alt="" width="28" height="28" class="site-footer-icon" />
-          <div class="site-footer-brand-text">
-            <span class="site-footer-name">WORLD MONITOR</span>
-            <span class="site-footer-sub">v${__APP_VERSION__} &middot; <a href="https://x.com/eliehabib" target="_blank" rel="noopener" class="site-footer-credit">@eliehabib</a></span>
-          </div>
-        </div>
-        <nav>
-          <a href="${this.ctx.isDesktopApp ? 'https://worldmonitor.app/pro' : 'https://www.worldmonitor.app/pro'}" target="_blank" rel="noopener">Pro</a>
-          <a href="${this.ctx.isDesktopApp ? 'https://worldmonitor.app/blog/' : 'https://www.worldmonitor.app/blog/'}" target="_blank" rel="noopener">Blog</a>
-          <a href="${this.ctx.isDesktopApp ? 'https://worldmonitor.app/docs' : 'https://www.worldmonitor.app/docs'}" target="_blank" rel="noopener">Docs</a>
-          <a href="https://status.worldmonitor.app/" target="_blank" rel="noopener">Status</a>
-          <a href="https://github.com/koala73/worldmonitor" target="_blank" rel="noopener">GitHub</a>
-          <a href="https://discord.gg/re63kWKxaz" target="_blank" rel="noopener">Discord</a>
-          <a href="https://x.com/worldmonitorai" target="_blank" rel="noopener">X</a>
-          ${this.ctx.isDesktopApp ? '' : `<span id="footerDownloadMount"></span>`}
-        </nav>
-        <span class="site-footer-copy">&copy; ${new Date().getFullYear()} World Monitor</span>
-      </footer>
+
     `;
 
     this.createPanels();
@@ -737,6 +615,8 @@ export class PanelLayoutManager implements AppModule {
 
     this.createPanel('heatmap', () => new HeatmapPanel());
     this.createPanel('markets', () => new MarketPanel());
+    this.createPanel('stock-monitor', () => new StockMonitorPanel());
+    this.createPanel('stock-global-intelligence', () => new StockGlobalIntelligencePanel());
     this.createPanel('stock-analysis', () => new StockAnalysisPanel());
     this.createPanel('stock-backtest', () => new StockBacktestPanel());
     // Web premium gating for stock-analysis and stock-backtest is handled
@@ -965,7 +845,7 @@ export class PanelLayoutManager implements AppModule {
       }),
     );
 
-    const _lockPanels = this.ctx.isDesktopApp && !hasPremiumAccess();
+    const _lockPanels = false;
 
     this.lazyPanel('daily-market-brief', () =>
       import('@/components/DailyMarketBriefPanel').then(m => new m.DailyMarketBriefPanel()),
@@ -974,8 +854,6 @@ export class PanelLayoutManager implements AppModule {
     this.lazyPanel('market-implications', () =>
       import('@/components/MarketImplicationsPanel').then(m => new m.MarketImplicationsPanel()),
     );
-    // Gating for daily-market-brief, market-implications, and chat-analyst is handled
-    // reactively by updatePanelGating() via auth state subscription (all in WEB_PREMIUM_PANELS).
 
     this.lazyPanel('chat-analyst', () =>
       import('@/components/ChatAnalystPanel').then(m => new m.ChatAnalystPanel()),
@@ -1308,65 +1186,6 @@ export class PanelLayoutManager implements AppModule {
       this.ctx.unifiedSettings?.open('panels');
     });
     panelsGrid.appendChild(addPanelBlock);
-
-    // Always create Pro and MCP add-panel blocks — show/hide reactively via auth state.
-    const proBlock = document.createElement('button');
-    proBlock.className = 'add-panel-block ai-widget-block ai-widget-block-pro';
-    proBlock.setAttribute('aria-label', t('widgets.createInteractive'));
-    const proIcon = document.createElement('span');
-    proIcon.className = 'add-panel-block-icon';
-    proIcon.textContent = '\u26a1';
-    const proLabel = document.createElement('span');
-    proLabel.className = 'add-panel-block-label';
-    proLabel.textContent = t('widgets.createInteractive');
-    const proBadge = document.createElement('span');
-    proBadge.className = 'widget-pro-badge';
-    proBadge.textContent = t('widgets.proBadge');
-    proBlock.appendChild(proIcon);
-    proBlock.appendChild(proLabel);
-    proBlock.appendChild(proBadge);
-    proBlock.addEventListener('click', () => {
-      openWidgetChatModal({
-        mode: 'create',
-        tier: 'pro',
-        onComplete: (spec) => this.addCustomWidget(spec),
-      });
-    });
-    panelsGrid.appendChild(proBlock);
-
-    const mcpBlock = document.createElement('button');
-    mcpBlock.className = 'add-panel-block mcp-panel-block';
-    mcpBlock.setAttribute('aria-label', t('mcp.connectPanel'));
-    const mcpIcon = document.createElement('span');
-    mcpIcon.className = 'add-panel-block-icon';
-    mcpIcon.textContent = '\u26a1';
-    const mcpLabel = document.createElement('span');
-    mcpLabel.className = 'add-panel-block-label';
-    mcpLabel.textContent = t('mcp.connectPanel');
-    const mcpBadge = document.createElement('span');
-    mcpBadge.className = 'widget-pro-badge';
-    mcpBadge.textContent = t('widgets.proBadge');
-    mcpBlock.appendChild(mcpIcon);
-    mcpBlock.appendChild(mcpLabel);
-    mcpBlock.appendChild(mcpBadge);
-    mcpBlock.addEventListener('click', () => {
-      openMcpConnectModal({
-        onComplete: (spec) => this.addMcpPanel(spec),
-      });
-    });
-    panelsGrid.appendChild(mcpBlock);
-
-    // Reactively show/hide Pro-only UI blocks based on auth state
-    const proBlocks = [proBlock, mcpBlock];
-    const applyProBlockGating = (isPro: boolean) => {
-      for (const block of proBlocks) {
-        block.style.display = isPro ? '' : 'none';
-      }
-    };
-    applyProBlockGating(hasPremiumAccess(getAuthState()));
-    this.proBlockUnsubscribe = subscribeAuthState((state) => {
-      applyProBlockGating(hasPremiumAccess(state));
-    });
 
     const bottomGrid = document.getElementById('mapBottomGrid');
     if (bottomGrid) {

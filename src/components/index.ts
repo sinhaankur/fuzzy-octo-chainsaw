@@ -6,6 +6,8 @@ export { DeckGLMap } from './DeckGLMap';
 export { MapContainer, type MapView, type TimeRange, type MapContainerState } from './MapContainer';
 export * from './NewsPanel';
 export * from './MarketPanel';
+export * from './StockMonitorPanel';
+export * from './StockGlobalIntelligencePanel';
 export * from './StockAnalysisPanel';
 export * from './StockBacktestPanel';
 export * from './PredictionPanel';

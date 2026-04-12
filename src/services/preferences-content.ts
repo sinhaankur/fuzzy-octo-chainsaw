@@ -359,8 +359,7 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
   html += `</div></details>`;
 
   // ── Notifications group (web-only) ──
-  // Three states: (a) confirmed PRO → full UI, (b) everything else → locked [PRO] section.
-  // When entitlements haven't loaded yet (null), show locked to avoid flashing full UI to free users.
+  // Only show the notifications UI when entitled; otherwise show a neutral unavailable message.
   if (!host.isDesktopApp) {
     if (host.isSignedIn && hasTier(1)) {
       html += `<details class="wm-pref-group" id="usNotifGroup">`;
@@ -371,10 +370,9 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
       html += `</div></details>`;
     } else {
       html += `<details class="wm-pref-group">`;
-      html += `<summary>Notifications <span class="panel-toggle-pro-badge">PRO</span></summary>`;
+      html += `<summary>Notifications</summary>`;
       html += `<div class="wm-pref-group-content">`;
-      html += `<div class="ai-flow-toggle-desc">Get real-time intelligence alerts delivered to Telegram, Slack, Discord, and Email with configurable sensitivity, quiet hours, and digest scheduling.</div>`;
-      html += `<button type="button" class="panel-locked-cta" id="usNotifUpgradeBtn">Upgrade to Pro</button>`;
+      html += `<div class="ai-flow-toggle-desc">Notifications are unavailable in this build.</div>`;
       html += `</div></details>`;
     }
   }
@@ -627,24 +625,7 @@ export function renderPreferences(host: PreferencesHost): PreferencesResult {
 
       if (!host.isDesktopApp) updateAiStatus(container);
 
-      // ── Notifications section: locked [PRO] upgrade button ──
-      if (!host.isDesktopApp && !(host.isSignedIn && hasTier(1))) {
-        const upgradeBtn = container.querySelector<HTMLButtonElement>('#usNotifUpgradeBtn');
-        if (upgradeBtn) {
-          upgradeBtn.addEventListener('click', () => {
-            if (!host.isSignedIn) {
-              import('@/services/clerk').then(m => m.openSignIn()).catch(() => {
-                window.open('https://worldmonitor.app/pro', '_blank');
-              });
-              return;
-            }
-            import('@/services/checkout').then(m => import('@/config/products').then(p => m.startCheckout(p.DEFAULT_UPGRADE_PRODUCT))).catch(() => {
-              window.open('https://worldmonitor.app/pro', '_blank');
-            });
-          }, { signal });
-        }
-      }
-      // ── Notifications section: full PRO UI ──
+      // ── Notifications section: full entitled UI ──
       if (!host.isDesktopApp && host.isSignedIn && hasTier(1)) {
         let notifPollInterval: ReturnType<typeof setInterval> | null = null;
 

@@ -2,12 +2,11 @@ import type { AppContext, AppModule } from '@/app/app-context';
 import type { AirlineIntelPanel } from '@/components/AirlineIntelPanel';
 import type { CustomWidgetPanel } from '@/components/CustomWidgetPanel';
 import { openWidgetChatModal } from '@/components/WidgetChatModal';
-import { deleteWidget, getWidget, saveWidget, isProUser } from '@/services/widget-store';
-import { FREE_MAX_PANELS, FREE_MAX_SOURCES } from '@/config/panels';
+import { deleteWidget, getWidget, saveWidget } from '@/services/widget-store';
 import type { McpDataPanel } from '@/components/McpDataPanel';
 import { openMcpConnectModal } from '@/components/McpConnectModal';
 import { deleteMcpPanel, getMcpPanel, saveMcpPanel } from '@/services/mcp-store';
-import type { PanelConfig, MapLayers, MilitaryFlight } from '@/types';
+import type { PanelConfig, MapLayers, MilitaryFlight, NewsItem } from '@/types';
 import type { MapView } from '@/components';
 import type { PositionSample } from '@/services/aviation';
 import type { ClusteredEvent } from '@/types';
@@ -52,7 +51,6 @@ import {
   trackMapLayerToggle,
   trackPanelToggled,
   trackDownloadClicked,
-  trackGateHit,
 } from '@/services/analytics';
 import { detectPlatform, allButtons, buttonsForPlatform } from '@/components/DownloadBanner';
 import type { Platform } from '@/components/DownloadBanner';
@@ -65,7 +63,6 @@ import { AuthLauncher } from '@/components/AuthLauncher';
 import { AuthHeaderWidget } from '@/components/AuthHeaderWidget';
 import { t } from '@/services/i18n';
 import { TvModeController } from '@/services/tv-mode';
-import { getAuthState, subscribeAuthState } from '@/services/auth-state';
 
 export interface EventHandlerCallbacks {
   updateSearchIndex: () => void;
@@ -107,7 +104,8 @@ export class EventHandlerManager implements AppModule {
   private boundPanelCloseHandler: ((e: Event) => void) | null = null;
   private boundWidgetModifyHandler: ((e: Event) => void) | null = null;
   private boundUndoHandler: ((e: KeyboardEvent) => void) | null = null;
-  private proGateUnsubscribers: Array<() => void> = [];
+  private boundStockSelectedHandler: ((e: Event) => void) | null = null;
+
   private closedPanelStack: string[] = []; // max-items: 20
   private idleTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private snapshotIntervalId: ReturnType<typeof setInterval> | null = null;
@@ -142,10 +140,6 @@ export class EventHandlerManager implements AppModule {
     if (!panelId) return;
     const config = this.ctx.panelSettings[panelId];
     if (!config) return;
-    if (!isProUser()) {
-      const enabledCount = Object.entries(this.ctx.panelSettings).filter(([k, p]) => p.enabled && !k.startsWith('cw-')).length;
-      if (enabledCount >= FREE_MAX_PANELS) return;
-    }
     config.enabled = true;
     trackPanelToggled(panelId, true);
     saveToStorage(STORAGE_KEYS.panels, this.ctx.panelSettings);
@@ -304,8 +298,11 @@ export class EventHandlerManager implements AppModule {
       document.removeEventListener('keydown', this.boundUndoHandler);
       this.boundUndoHandler = null;
     }
-    for (const unsub of this.proGateUnsubscribers) unsub();
-    this.proGateUnsubscribers = [];
+    if (this.boundStockSelectedHandler) {
+      window.removeEventListener('wm:stock-selected', this.boundStockSelectedHandler);
+      this.boundStockSelectedHandler = null;
+    }
+
     this.ctx.tvMode?.destroy();
     this.ctx.tvMode = null;
     this.ctx.unifiedSettings?.destroy();
@@ -333,6 +330,24 @@ export class EventHandlerManager implements AppModule {
       track('search-open', { source: 'fab' });
       openSearch();
     });
+
+    document.getElementById('connectAiBtn')?.addEventListener('click', () => {
+      this.ctx.unifiedSettings?.open('settings');
+    });
+
+    // Listen for stock selection events from StockMonitorPanel
+    this.boundStockSelectedHandler = ((e: CustomEvent<{
+      ticker: string;
+      companyName: string;
+      sector: string;
+      industry: string;
+      hqCountry: string;
+      countryCode: string;
+      relatedCountries: Array<{ code: string; name: string; relationship: string; risk: string }>;
+    }>) => {
+      this.handleStockSelected(e.detail);
+    }) as EventListener;
+    window.addEventListener('wm:stock-selected', this.boundStockSelectedHandler);
 
     document.getElementById('copyLinkBtn')?.addEventListener('click', async () => {
       const shareUrl = this.getShareUrl();
@@ -1024,12 +1039,6 @@ export class EventHandlerManager implements AppModule {
       headerRight.insertBefore(el, headerRight.firstChild);
     }
 
-    const applyProGate = (isPro: boolean, initial = false) => {
-      el.style.display = isPro ? '' : 'none';
-      if (initial && !isPro) trackGateHit('export');
-    };
-    applyProGate(getAuthState().user?.role === 'pro', true);
-    this.proGateUnsubscribers.push(subscribeAuthState(state => applyProGate(state.user?.role === 'pro')));
   }
 
   setupUnifiedSettings(): void {
@@ -1055,14 +1064,6 @@ export class EventHandlerManager implements AppModule {
       getDisabledSources: () => this.ctx.disabledSources,
       toggleSource: (name: string) => {
         const reenabling = this.ctx.disabledSources.has(name);
-        if (reenabling && !isProUser()) {
-          const allSources = this.getAllSourceNames();
-          const currentlyEnabled = allSources.filter(n => !this.ctx.disabledSources.has(n)).length;
-          if (currentlyEnabled + 1 > FREE_MAX_SOURCES) {
-            this.showToast(t('modals.settingsWindow.freeSourceLimit', { max: String(FREE_MAX_SOURCES) }));
-            return;
-          }
-        }
         if (reenabling) {
           this.ctx.disabledSources.delete(name);
         } else {
@@ -1071,15 +1072,6 @@ export class EventHandlerManager implements AppModule {
         saveToStorage(STORAGE_KEYS.disabledFeeds, Array.from(this.ctx.disabledSources));
       },
       setSourcesEnabled: (names: string[], enabled: boolean) => {
-        if (enabled && !isProUser()) {
-          const allSources = this.getAllSourceNames();
-          const currentlyEnabled = allSources.filter(n => !this.ctx.disabledSources.has(n)).length;
-          const wouldEnable = names.filter(n => this.ctx.disabledSources.has(n) && allSources.includes(n)).length;
-          if (currentlyEnabled + wouldEnable > FREE_MAX_SOURCES) {
-            this.showToast(t('modals.settingsWindow.freeSourceLimit', { max: String(FREE_MAX_SOURCES) }));
-            return;
-          }
-        }
         for (const name of names) {
           if (enabled) this.ctx.disabledSources.delete(name);
           else this.ctx.disabledSources.add(name);
@@ -1148,12 +1140,6 @@ export class EventHandlerManager implements AppModule {
       headerRight.insertBefore(el, headerRight.firstChild);
     }
 
-    const applyProGate = (isPro: boolean, initial = false) => {
-      el.style.display = isPro ? '' : 'none';
-      if (initial && !isPro) trackGateHit('playback');
-    };
-    applyProGate(getAuthState().user?.role === 'pro', true);
-    this.proGateUnsubscribers.push(subscribeAuthState(state => applyProGate(state.user?.role === 'pro')));
   }
 
   setupSnapshotSaving(): void {
@@ -1566,5 +1552,94 @@ export class EventHandlerManager implements AppModule {
       const panel = this.ctx.panels[key];
       panel?.toggle(config.enabled);
     });
+  }
+
+  private async handleStockSelected(detail: {
+    ticker: string;
+    companyName: string;
+    sector: string;
+    industry: string;
+    hqCountry: string;
+    countryCode: string;
+    relatedCountries: Array<{ code: string; name: string; relationship: string; risk: string }>;
+  }): Promise<void> {
+    const intelligencePanel = this.ctx.panels['stock-global-intelligence'];
+    if (!intelligencePanel) return;
+
+    // Filter news by relevance to sector
+    const relevantNews = this.ctx.allNews.filter(n => {
+      const text = `${n.title}`.toLowerCase();
+      const hasSectorKeyword = text.includes(detail.sector.toLowerCase());
+      const hasGeoIssueKeyword = ['supply', 'trade', 'tariff', 'policy', 'market', 'economic', 'risk'].some(kw => text.includes(kw));
+      return hasSectorKeyword || hasGeoIssueKeyword;
+    }).slice(0, 30);
+
+    // Filter intelligence events by related countries (using lat/lon approximation for now)
+    const relevantIntel = this.ctx.latestClusters.filter(e => {
+      // Since ClusteredEvent doesn't have country field, use lat/lon if available
+      // or just take relevant ones by primaryTitle
+      return e.sourceCount > 1 || e.threat;
+    }).slice(0, 20);
+
+    // Extract market signals from latest markets
+    const marketSignals: string[] = [];
+    for (const market of this.ctx.latestMarkets.slice(0, 30)) {
+      if (market.change !== null && Math.abs(market.change) > 2) {
+        const direction = market.change > 0 ? 'up' : 'down';
+        marketSignals.push(`${market.symbol}: ${direction} ${Math.abs(market.change).toFixed(1)}%`);
+      }
+    }
+
+    // Supply chain risks from related countries
+    const supplyChainRisks = detail.relatedCountries
+      .filter((c: { relationship: string }) => c.relationship === 'Supply Chain')
+      .map((c: { name: string; risk: string; relationship: string }) => `${c.name}: ${c.risk} risk`);
+
+    // Geopolitical risks from latest intel
+    const geopoliticalRisks = relevantIntel
+      .slice(0, 5)
+      .map((e: { primaryTitle: string }) => e.primaryTitle);
+
+    // Sector outlook
+    const sectorOutlook = [
+      `${detail.sector} sector analysis`,
+      `Key geography: ${detail.hqCountry}`,
+    ];
+
+    // Macro indicators
+    const macroIndicators = this.ctx.latestMarkets
+      .filter(m => ['VIX', 'GOLD', 'DXY', 'US10Y', 'CRB'].includes(m.symbol))
+      .map(m => `${m.symbol}: ${m.price?.toFixed(2) || 'N/A'} (${m.change !== null ? (m.change > 0 ? '+' : '') + m.change.toFixed(1) + '%' : 'N/A'})`);
+
+    // Now call the updateForStock method on the StockGlobalIntelligencePanel
+    const panel = intelligencePanel as unknown as {
+      updateForStock: (
+        symbol: string,
+        companyName: string,
+        sector: string,
+        globalNews: NewsItem[],
+        intelEvents: ClusteredEvent[],
+        marketSignals: string[],
+        supplyChainRisks: string[],
+        geopoliticalRisks: string[],
+        sectorOutlook: string[],
+        macroIndicators: string[]
+      ) => Promise<void>;
+    };
+
+    if (panel && 'updateForStock' in panel && typeof panel.updateForStock === 'function') {
+      await panel.updateForStock(
+        detail.ticker,
+        detail.companyName,
+        detail.sector,
+        relevantNews,
+        relevantIntel,
+        marketSignals,
+        supplyChainRisks,
+        geopoliticalRisks,
+        sectorOutlook,
+        macroIndicators
+      );
+    }
   }
 }

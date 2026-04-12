@@ -412,7 +412,7 @@
       "layers": "Type \"military\" or \"finance\" for layer presets",
       "time": "Type \"1h\", \"24h\", or \"7d\" to filter by time",
       "settings": "Type \"dark mode\", \"settings\", or \"fullscreen\"",
-      "flight": "Search live flights by callsign (PRO)",
+      "flight": "Search live flights by callsign",
       "mapExample": "iran",
       "panelExample": "news",
       "briefExample": "brief china",
@@ -635,8 +635,8 @@
       }
     },
     "settingsWindow": {
-      "freePanelLimit": "Free plan: max {{max}} panels. Upgrade to PRO for unlimited.",
-      "freeSourceLimit": "Free plan: max {{max}} sources. Upgrade to PRO for unlimited.",
+      "freePanelLimit": "Max {{max}} panels active at once.",
+      "freeSourceLimit": "Max {{max}} sources active at once.",
       "validating": "Validating API keys...",
       "saved": "Settings saved",
       "failed": "Save failed: {{error}}",
@@ -2840,8 +2840,9 @@
     "signIn": "Sign In to Unlock",
     "verifyEmailToUnlock": "Verify your email to access premium features",
     "resendVerification": "Resend Verification",
-    "upgradeDesc": "Upgrade to Pro for full access to premium analytics",
-    "upgradeToPro": "Upgrade to Pro",
+    "upgradeDesc": "This feature is unavailable in this build",
+    "upgradeToPro": "Unavailable",
+    "unavailable": "Unavailable",
     "features": {
       "orefSirens1": "Real-time Israel missile & rocket alerts",
       "orefSirens2": "Siren zone mapping with threat classification",
