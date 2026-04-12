@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StockMonitor AI — Stock Intelligence with Local LLM</title>
+  <meta name="description" content="AI-powered stock analysis using your local LLM. Select any stock and instantly get geopolitical, macro, and supply chain insights. Inspired by worldmonitor.app.">
+  <meta name="keywords" content="intelligence, geopolitics, market analysis, stock analysis, real-time data">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      line-height: 1.6;
+      color: #333;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      min-height: 100vh;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%);
+      color: white;
+      padding: 80px 20px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: 
+        radial-gradient(circle at 20% 50%, rgba(59, 130, 246, 0.1) 0%, transparent 50%),
+        radial-gradient(circle at 80% 80%, rgba(168, 85, 247, 0.1) 0%, transparent 50%);
+      pointer-events: none;
+    }
+
+    .hero-content {
+      position: relative;
+      z-index: 1;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 3.5rem;
+      margin-bottom: 20px;
+      background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      font-weight: 900;
+    }
+
+    .subtitle {
+      font-size: 1.3rem;
+      color: #cbd5e1;
+      margin-bottom: 40px;
+      font-weight: 300;
+    }
+
+    .cta-buttons {
+      display: flex;
+      gap: 20px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 60px;
+    }
+
+    .btn {
+      padding: 14px 32px;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      text-decoration: none;
+      display: inline-block;
+      transition: all 0.3s ease;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+      color: white;
+      box-shadow: 0 10px 25px rgba(59, 130, 246, 0.3);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 15px 35px rgba(59, 130, 246, 0.4);
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: #e2e8f0;
+      border: 2px solid #475569;
+    }
+
+    .btn-secondary:hover {
+      border-color: #64748b;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .features {
+      max-width: 1200px;
+      margin: -40px auto 0;
+      padding: 60px 20px;
+      position: relative;
+      z-index: 2;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 30px;
+      margin-bottom: 80px;
+    }
+
+    .feature-card {
+      background: white;
+      border-radius: 12px;
+      padding: 40px 30px;
+      box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .feature-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 15px 40px rgba(0, 0, 0, 0.15);
+    }
+
+    .feature-icon {
+      font-size: 3rem;
+      margin-bottom: 20px;
+    }
+
+    .feature-card h3 {
+      font-size: 1.3rem;
+      margin-bottom: 12px;
+      color: #0f172a;
+    }
+
+    .feature-card p {
+      color: #64748b;
+      font-size: 0.95rem;
+      line-height: 1.7;
+    }
+
+    .section {
+      background: white;
+      padding: 80px 20px;
+      margin-bottom: 0;
+    }
+
+    .section:nth-child(even) {
+      background: #f8fafc;
+    }
+
+    .section-content {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    h2 {
+      font-size: 2.5rem;
+      color: #0f172a;
+      margin-bottom: 30px;
+      text-align: center;
+    }
+
+    .highlight {
+      background: linear-gradient(120deg, #fef3c7 0%, #dbeafe 100%);
+      padding: 40px;
+      border-radius: 12px;
+      margin: 40px 0;
+    }
+
+    .highlight h3 {
+      color: #0f172a;
+      margin-bottom: 15px;
+      font-size: 1.5rem;
+    }
+
+    .data-sources {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      margin: 40px 0;
+    }
+
+    .data-source {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      border-left: 4px solid #3b82f6;
+    }
+
+    .data-source h4 {
+      color: #0f172a;
+      margin-bottom: 10px;
+      font-size: 1.1rem;
+    }
+
+    .data-source p {
+      color: #64748b;
+      font-size: 0.9rem;
+    }
+
+    .footer {
+      background: #0f172a;
+      color: #cbd5e1;
+      padding: 40px 20px;
+      text-align: center;
+      border-top: 1px solid #334155;
+    }
+
+    .footer a {
+      color: #3b82f6;
+      text-decoration: none;
+      transition: color 0.3s ease;
+    }
+
+    .footer a:hover {
+      color: #60a5fa;
+    }
+
+    .tech-stack {
+      background: #1e293b;
+      color: white;
+      padding: 30px;
+      border-radius: 8px;
+      margin: 30px 0;
+    }
+
+    .tech-stack h4 {
+      margin-bottom: 15px;
+    }
+
+    .tech-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .tech-tag {
+      background: #334155;
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      color: #e2e8f0;
+    }
+
+    .workflow {
+      background: #f8fafc;
+      padding: 40px;
+      border-radius: 12px;
+      margin: 40px 0;
+    }
+
+    .workflow h4 {
+      color: #0f172a;
+      margin-bottom: 25px;
+      text-align: center;
+    }
+
+    .workflow-step {
+      display: flex;
+      align-items: center;
+      margin-bottom: 20px;
+      font-size: 0.95rem;
+    }
+
+    .workflow-step:last-child {
+      margin-bottom: 0;
+    }
+
+    .step-number {
+      background: #3b82f6;
+      color: white;
+      width: 35px;
+      height: 35px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-right: 20px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    @media (max-width: 768px) {
+      h1 {
+        font-size: 2.5rem;
+      }
+      
+      .subtitle {
+        font-size: 1.1rem;
+      }
+
+      .cta-buttons {
+        flex-direction: column;
+      }
+
+      .btn {
+        width: 100%;
+      }
+
+      h2 {
+        font-size: 1.8rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <div class="hero-content">
+      <h1>📈 StockMonitor AI</h1>
+      <p class="subtitle">AI-Powered Stock Intelligence Using Your Local LLM</p>
+      <p style="color: rgba(255,255,255,0.65); font-size: 0.9rem; margin-top: -10px; margin-bottom: 20px;">Inspired by <a href="https://worldmonitor.app" style="color: rgba(255,255,255,0.8); text-decoration: underline;">worldmonitor.app</a> — focused on stock analysis powered by your local AI model</p>
+      <div class="cta-buttons">
+        <a href="https://sinhaankur.github.io/Stockmonitor/" class="btn btn-primary">Launch App</a>
+        <a href="https://github.com/sinhaankur/Stockmonitor" class="btn btn-secondary">View on GitHub</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="features">
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="feature-icon">📊</div>
+        <h3>Stock Global Intelligence</h3>
+        <p>AI-powered analysis that synthesizes 8+ global data sources to provide stock-specific geopolitical, macro, and supply chain insights in real-time.</p>
+      </div>
+      
+      <div class="feature-card">
+        <div class="feature-icon">🌐</div>
+        <h3>Global Situation Monitor</h3>
+        <p>Strategic risk overview dashboard tracking global events, intelligence alerts, and market implications across 30+ data sources.</p>
+      </div>
+      
+      <div class="feature-card">
+        <div class="feature-icon">📈</div>
+        <h3>Stock Monitor</h3>
+        <p>Portfolio management with real-time quotes, insider transactions, analyst ratings, dividend profiles, and company geographic exposure.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🤖</div>
+        <h3>Browser-Based LLM</h3>
+        <p>ONNX-powered text analysis runs locally in your browser using Transformers.js. No data leaves your machine.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">⚡</div>
+        <h3>Real-Time Updates</h3>
+        <p>Live news feeds, intelligence events, market data, and satellite imagery update continuously with event-driven architecture.</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🔒</div>
+        <h3>Privacy First</h3>
+        <p>No subscription required. All features available to all users. Open-source. Full control over your data.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-content">
+      <h2>Stock Global Intelligence</h2>
+      
+      <div class="highlight">
+        <h3>How It Works</h3>
+        <p>Select any stock in the Stock Monitor panel and the AI instantly analyzes how global events affect it. The system aggregates live news, geopolitical intelligence, market signals, supply chain risks, macro indicators—then uses browser-based LLM to generate actionable insights specific to that stock and sector.</p>
+      </div>
+
+      <h3 style="color: #0f172a; margin-top: 40px; margin-bottom: 20px;">Data Sources Analyzed</h3>
+      
+      <div class="data-sources">
+        <div class="data-source">
+          <h4>📰 Live News Headlines</h4>
+          <p>Sector-relevant news filtered from 30+ global sources</p>
+        </div>
+        <div class="data-source">
+          <h4>🔍 Intelligence Events</h4>
+          <p>Geopolitical, conflict, and threat alerts from GDELT</p>
+        </div>
+        <div class="data-source">
+          <h4>📈 Market Signals</h4>
+          <p>Volatility spikes, sector rotations, unusual volume</p>
+        </div>
+        <div class="data-source">
+          <h4>🔗 Supply Chain Risks</h4>
+          <p>Country exposure and related supply chain threats</p>
+        </div>
+        <div class="data-source">
+          <h4>⚠️ Geopolitical Threats</h4>
+          <p>Sanctions, conflicts, policy changes affecting sectors</p>
+        </div>
+        <div class="data-source">
+          <h4>💹 Macro Indicators</h4>
+          <p>VIX, Gold, DXY, Yield Curve, commodity prices</p>
+        </div>
+      </div>
+
+      <div class="workflow">
+        <h4>Analysis Workflow</h4>
+        <div class="workflow-step">
+          <div class="step-number">1</div>
+          <div>User selects a stock from the Stock Monitor portfolio</div>
+        </div>
+        <div class="workflow-step">
+          <div class="step-number">2</div>
+          <div>System aggregates all relevant global data for that stock's sector and geographic exposure</div>
+        </div>
+        <div class="workflow-step">
+          <div class="step-number">3</div>
+          <div>Browser-based LLM (ONNX Transformers.js) analyzes context and generates insights</div>
+        </div>
+        <div class="workflow-step">
+          <div class="step-number">4</div>
+          <div>Results display with confidence score and supporting data points</div>
+        </div>
+        <div class="workflow-step">
+          <div class="step-number">5</div>
+          <div>Results are cached to prevent re-analysis on re-selection</div>
+        </div>
+      </div>
+
+      <div class="tech-stack">
+        <h4>Technology Stack</h4>
+        <div class="tech-tags">
+          <span class="tech-tag">TypeScript</span>
+          <span class="tech-tag">Vite</span>
+          <span class="tech-tag">Preact</span>
+          <span class="tech-tag">ONNX</span>
+          <span class="tech-tag">Transformers.js</span>
+          <span class="tech-tag">Web Workers</span>
+          <span class="tech-tag">IndexedDB</span>
+          <span class="tech-tag">Custom Events</span>
+          <span class="tech-tag">Edge Functions</span>
+          <span class="tech-tag">Redis (Upstash)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-content">
+      <h2>Features</h2>
+      
+      <h3 style="color: #0f172a; margin-bottom: 20px;">Core Capabilities</h3>
+      <ul style="color: #64748b; line-height: 2; margin-left: 20px;">
+        <li>✅ <strong>86 Intelligence Panels</strong> - Markets, conflicts, supply chain, climate, cyber, maritime, aviation</li>
+        <li>✅ <strong>30+ Data Sources</strong> - GDELT, Reuters, Bloomberg, OpenSky, Sentinel-5P, and more</li>
+        <li>✅ <strong>Real-Time Map</strong> - Interactive globe with live events, military movements, and alerts</li>
+        <li>✅ <strong>Portfolio Management</strong> - Upload CSV, track country exposure, insider transactions</li>
+        <li>✅ <strong>Local LLM Models</strong> - Ollama and LM Studio integration for continued analysis</li>
+        <li>✅ <strong>Backtesting</strong> - Test trading strategies against historical data</li>
+        <li>✅ <strong>Playback & Recording</strong> - Replay historical market moments</li>
+        <li>✅ <strong>Custom Monitors</strong> - Alert on specific tickers, countries, or events</li>
+        <li>✅ <strong>Dark Mode</strong> - Easy on the eyes for extended use</li>
+        <li>✅ <strong>100% Open Source</strong> - MIT license, self-hostable</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-content">
+      <h2>Getting Started</h2>
+      
+      <div style="margin-top: 30px; color: #64748b;">
+        <h3 style="color: #0f172a; margin-bottom: 15px;">Live Demo</h3>
+        <p style="margin-bottom: 20px;">Visit the live application at <a href="https://sinhaankur.github.io/Stockmonitor/" style="color: #3b82f6; text-decoration: none; font-weight: 600;">sinhaankur.github.io/Stockmonitor</a></p>
+
+        <h3 style="color: #0f172a; margin-bottom: 15px; margin-top: 40px;">Self-Host</h3>
+        <p style="margin-bottom: 20px;">Clone the repository and run locally:</p>
+        <div class="highlight" style="background: #1e293b; color: #e2e8f0; padding: 20px; border-radius: 8px; font-family: 'Monaco', monospace; font-size: 0.9rem; overflow-x: auto;">
+          <code>git clone https://github.com/sinhaankur/Stockmonitor<br>
+cd Stockmonitor<br>
+npm install<br>
+npm run dev</code>
+        </div>
+
+        <h3 style="color: #0f172a; margin-bottom: 15px; margin-top: 40px;">Usage</h3>
+        <ol style="margin-left: 20px;">
+          <li style="margin-bottom: 10px;">Click on <strong>Stock Monitor</strong> panel or search for a ticker</li>
+          <li style="margin-bottom: 10px;">Select any stock from your portfolio</li>
+          <li style="margin-bottom: 10px;">The <strong>Stock Global Intelligence</strong> panel instantly generates insights</li>
+          <li style="margin-bottom: 10px;">View the <strong>Global Situation</strong> panel for context on major events</li>
+          <li>Optional: Connect local LLM via Settings ⚡ Connect AI button</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-content">
+      <h2>Documentation</h2>
+      
+      <div style="margin-top: 30px; color: #64748b; line-height: 2;">
+        <p><strong>📖 Full Documentation:</strong> <a href="https://github.com/sinhaankur/Stockmonitor/tree/main/docs" style="color: #3b82f6; text-decoration: none;">docs/</a></p>
+        <p><strong>🏗️ Architecture:</strong> <a href="https://github.com/sinhaankur/Stockmonitor/blob/main/ARCHITECTURE.md" style="color: #3b82f6; text-decoration: none;">ARCHITECTURE.md</a></p>
+        <p><strong>🤝 Contributing:</strong> <a href="https://github.com/sinhaankur/Stockmonitor/blob/main/CONTRIBUTING.md" style="color: #3b82f6; text-decoration: none;">CONTRIBUTING.md</a></p>
+        <p><strong>📚 Data Sources:</strong> <a href="https://github.com/sinhaankur/Stockmonitor/blob/main/docs/data-sources.mdx" style="color: #3b82f6; text-decoration: none;">data-sources.mdx</a></p>
+        <p><strong>🔌 API Reference:</strong> <a href="https://github.com/sinhaankur/Stockmonitor/tree/main/docs/api" style="color: #3b82f6; text-decoration: none;">docs/api/</a></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <p style="margin-bottom: 6px;">&copy; 2026 StockMonitor AI. Open source project.</p>
+    <p style="margin-bottom: 10px; font-size: 0.85rem; color: #94a3b8;">Inspired by <a href="https://worldmonitor.app" style="color: #3b82f6; text-decoration: none;">worldmonitor.app</a> — original global intelligence platform by its creators.</p>
+    <p>
+      <a href="https://github.com/sinhaankur/Stockmonitor">GitHub</a> •
+      <a href="https://sinhaankur.github.io/Stockmonitor/">Live App</a> •
+      <a href="https://github.com/sinhaankur/Stockmonitor/issues">Issues</a>
+    </p>
+    <p style="margin-top: 20px; font-size: 0.9rem;">Built with TypeScript, Vite, Preact, ONNX, and ❤️</p>
+  </div>
+</body>
+</html>
