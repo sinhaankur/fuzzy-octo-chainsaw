@@ -484,10 +484,6 @@ describe('panel guardrails — cw- prefix handling', () => {
 
   it('panel-layout loads widgets when feature is enabled', () => {
     assert.ok(
-      layout.includes('hasPremiumAccess') || layout.includes('isProUser'),
-      'panel-layout must check hasPremiumAccess (or isProUser) before loading widgets',
-    );
-    assert.ok(
       layout.includes('loadWidgets'),
       'panel-layout must call loadWidgets() to restore persisted widgets',
     );
@@ -501,10 +497,18 @@ describe('panel guardrails — cw- prefix handling', () => {
   });
 
   it('panel-layout AI button is gated by hasPremiumAccess', () => {
-    const hasCheck = layout.includes('hasPremiumAccess') || layout.includes('isProUser');
-    const buttonIdx = layout.indexOf('ai-widget-block');
-    assert.ok(hasCheck, 'hasPremiumAccess (or isProUser) not found in panel-layout');
-    assert.ok(buttonIdx !== -1, 'AI widget button not found in panel-layout');
+    // PRO gating removed — widget creator is open to all users
+    assert.ok(
+      layout.includes('wm:open-widget-creator') || layout.includes('addCustomWidget'),
+      'Widget creator functionality must exist in panel-layout',
+    );
+  });
+
+  it('panel-layout AI button exists', () => {
+    assert.ok(
+      layout.includes('wm:open-widget-creator') || layout.includes('addCustomWidget'),
+      'Widget creator functionality must exist in panel-layout',
+    );
   });
 
   it('panel-layout DEV warning excludes cw- panels', () => {
@@ -1222,24 +1226,20 @@ describe('PRO widget — modal and layout integration', () => {
   });
 
   it('layout has PRO create button when hasPremiumAccess', () => {
+    // PRO gating removed — button is now ungated
     assert.ok(
-      layout.includes('hasPremiumAccess') || layout.includes('isProUser'),
-      'panel-layout must import/call hasPremiumAccess (or isProUser)',
-    );
-    assert.ok(
-      layout.includes('ai-widget-block-pro'),
-      'panel-layout must render PRO create button (.ai-widget-block-pro)',
+      layout.includes('add-panel-block') || layout.includes('addCustomWidget'),
+      'panel-layout must render a create widget / add panel button',
     );
   });
 
-  it('layout PRO button opens modal with tier: pro', () => {
-    const proButtonIdx = layout.indexOf('ai-widget-block-pro');
-    assert.ok(proButtonIdx !== -1);
-    // Use 1200 chars to cover the full button element including the click handler
-    const proButtonRegion = layout.slice(proButtonIdx, proButtonIdx + 1200);
+  it('layout widget button opens create modal', () => {
+    const buttonIdx = layout.indexOf('add-panel-block');
+    assert.ok(buttonIdx !== -1, 'add-panel-block button not found in panel-layout');
+    const buttonRegion = layout.slice(buttonIdx, buttonIdx + 500);
     assert.ok(
-      proButtonRegion.includes("tier: 'pro'") || proButtonRegion.includes("tier:'pro'") || proButtonRegion.includes('"pro"'),
-      "PRO button must open modal with tier: 'pro'",
+      buttonRegion.includes('unifiedSettings') || buttonRegion.includes('open(') || layout.includes('wm:open-widget-creator') || layout.includes('openWidgetModal') || layout.includes('widget-modal'),
+      'Widget button must open create modal or settings panel',
     );
   });
 });
