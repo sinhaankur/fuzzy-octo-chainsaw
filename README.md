@@ -75,6 +75,31 @@ See the **[self-hosting guide](https://www.worldmonitor.app/docs/getting-started
 
 ---
 
+## Run Modes: Web or Local
+
+Use whichever mode fits the user:
+
+- **Web user (no install):** Open the hosted app URL.
+- **Local user:** Run with Node locally.
+
+### Local run
+
+```bash
+npm install
+npm run dev
+```
+
+### Web deploy (GitHub Pages)
+
+```bash
+npm install
+npm run deploy:gh-pages
+```
+
+This publishes the production SPA to `gh-pages` (with repo base path and SPA `404.html` fallback) so users can run it directly in the browser.
+
+---
+
 ## Tech Stack
 
 | Category | Technologies |
