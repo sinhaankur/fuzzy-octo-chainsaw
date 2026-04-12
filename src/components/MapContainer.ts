@@ -138,6 +138,7 @@ export class MapContainer {
   private cachedCyberThreats: CyberThreat[] | null = null;
   private cachedIranEvents: IranEvent[] | null = null;
   private cachedNewsLocations: NewsLocationMarker[] | null = null;
+  private cachedStockExposureLocations: NewsLocationMarker[] | null = null;
   private cachedPositiveEvents: PositiveGeoEvent[] | null = null;
   private cachedKindnessData: KindnessPoint[] | null = null;
   private cachedHappinessScores: HappinessData | null = null;
@@ -308,7 +309,7 @@ export class MapContainer {
     if (this.cachedDiseaseOutbreaks) this.setDiseaseOutbreaks(this.cachedDiseaseOutbreaks);
     if (this.cachedCyberThreats) this.setCyberThreats(this.cachedCyberThreats);
     if (this.cachedIranEvents) this.setIranEvents(this.cachedIranEvents);
-    if (this.cachedNewsLocations) this.setNewsLocations(this.cachedNewsLocations);
+    if (this.cachedNewsLocations || this.cachedStockExposureLocations) this.pushNewsLocationsToMap();
     if (this.cachedPositiveEvents) this.setPositiveEvents(this.cachedPositiveEvents);
     if (this.cachedKindnessData) this.setKindnessData(this.cachedKindnessData);
     if (this.cachedHappinessScores) this.setHappinessScores(this.cachedHappinessScores);
@@ -639,11 +640,24 @@ export class MapContainer {
 
   public setNewsLocations(data: NewsLocationMarker[]): void {
     this.cachedNewsLocations = data;
-    if (this.useGlobe) { this.globeMap?.setNewsLocations(data); return; }
+    this.pushNewsLocationsToMap();
+  }
+
+  public setStockExposureLocations(data: NewsLocationMarker[]): void {
+    this.cachedStockExposureLocations = data;
+    this.pushNewsLocationsToMap();
+  }
+
+  private pushNewsLocationsToMap(): void {
+    const merged = [
+      ...(this.cachedNewsLocations ?? []),
+      ...(this.cachedStockExposureLocations ?? []),
+    ];
+    if (this.useGlobe) { this.globeMap?.setNewsLocations(merged); return; }
     if (this.useDeckGL) {
-      this.deckGLMap?.setNewsLocations(data);
+      this.deckGLMap?.setNewsLocations(merged);
     } else {
-      this.svgMap?.setNewsLocations(data);
+      this.svgMap?.setNewsLocations(merged);
     }
   }
 
@@ -1086,6 +1100,7 @@ export class MapContainer {
     this.cachedCyberThreats = null;
     this.cachedIranEvents = null;
     this.cachedNewsLocations = null;
+    this.cachedStockExposureLocations = null;
     this.cachedPositiveEvents = null;
     this.cachedKindnessData = null;
     this.cachedHappinessScores = null;

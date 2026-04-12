@@ -63,6 +63,8 @@ import { AuthLauncher } from '@/components/AuthLauncher';
 import { AuthHeaderWidget } from '@/components/AuthHeaderWidget';
 import { t } from '@/services/i18n';
 import { TvModeController } from '@/services/tv-mode';
+import { getRuntimeConfigSnapshot, setFeatureToggle, setSecretValue } from '@/services/runtime-config';
+import { getCountryCentroid } from '@/services/country-geometry';
 
 export interface EventHandlerCallbacks {
   updateSearchIndex: () => void;
@@ -110,6 +112,7 @@ export class EventHandlerManager implements AppModule {
   private idleTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private snapshotIntervalId: ReturnType<typeof setInterval> | null = null;
   private clockIntervalId: ReturnType<typeof setInterval> | null = null;
+  private connectAiModalEl: HTMLElement | null = null;
 
   private readonly idlePauseMs = IDLE_PAUSE_MS;
   private readonly debouncedUrlSync = debounce(() => {
@@ -303,6 +306,8 @@ export class EventHandlerManager implements AppModule {
       this.boundStockSelectedHandler = null;
     }
 
+    this.closeConnectAiModal();
+
     this.ctx.tvMode?.destroy();
     this.ctx.tvMode = null;
     this.ctx.unifiedSettings?.destroy();
@@ -332,17 +337,7 @@ export class EventHandlerManager implements AppModule {
     });
 
     document.getElementById('connectAiBtn')?.addEventListener('click', () => {
-      this.ctx.unifiedSettings?.open('settings');
-      // Guide user directly into Local AI quick-connect controls.
-      window.setTimeout(() => {
-        const autoDetectBtn = document.getElementById('usLocalAiAutoDetect') as HTMLButtonElement | null;
-        if (autoDetectBtn) {
-          autoDetectBtn.focus();
-          return;
-        }
-        const urlInput = document.getElementById('usLocalAiUrl') as HTMLInputElement | null;
-        urlInput?.focus();
-      }, 0);
+      this.openConnectAiModal();
     });
 
     // Listen for stock selection events from StockMonitorPanel
@@ -1651,5 +1646,215 @@ export class EventHandlerManager implements AppModule {
         macroIndicators
       );
     }
+
+    // Highlight stock exposure countries on the map as risk-coded markers.
+    const exposureLocations = detail.relatedCountries
+      .map((country) => {
+        const centroid = getCountryCentroid(country.code);
+        if (!centroid) return null;
+        const threatLevel = country.risk === 'high'
+          ? 'critical'
+          : country.risk === 'medium'
+            ? 'high'
+            : 'elevated';
+        return {
+          lat: centroid.lat,
+          lon: centroid.lon,
+          title: `Stock exposure · ${detail.ticker} · ${country.name} (${country.relationship})`,
+          threatLevel,
+          timestamp: new Date(),
+        };
+      })
+      .filter((item): item is { lat: number; lon: number; title: string; threatLevel: string; timestamp: Date } => item !== null);
+
+    this.ctx.map?.setStockExposureLocations(exposureLocations);
+  }
+
+  private normalizeLocalAiUrl(raw: string): string | null {
+    const value = raw.trim();
+    if (!value) return null;
+    let normalized = value;
+    if (!/^https?:\/\//i.test(normalized)) normalized = `http://${normalized}`;
+    try {
+      const url = new URL(normalized);
+      if (!/^https?:$/.test(url.protocol)) return null;
+      url.hash = '';
+      return url.toString().replace(/\/$/, '');
+    } catch {
+      return null;
+    }
+  }
+
+  private async probeLocalAi(url: string): Promise<{ reachable: boolean; models: string[]; message: string }> {
+    const asJson = async (endpoint: string): Promise<any | null> => {
+      try {
+        const res = await fetch(endpoint, { method: 'GET' });
+        if (!res.ok) return null;
+        return await res.json();
+      } catch {
+        return null;
+      }
+    };
+
+    const ollama = await asJson(`${url}/api/tags`);
+    if (ollama && Array.isArray(ollama.models)) {
+      const models = ollama.models
+        .map((m: { name?: string }) => (m?.name || '').trim())
+        .filter(Boolean);
+      return { reachable: true, models, message: `Connected to Ollama at ${url}` };
+    }
+
+    const openAiUrl = /\/v1$/i.test(url) ? `${url}/models` : `${url}/v1/models`;
+    const openai = await asJson(openAiUrl);
+    if (openai && Array.isArray(openai.data)) {
+      const models = openai.data
+        .map((m: { id?: string }) => (m?.id || '').trim())
+        .filter(Boolean);
+      return { reachable: true, models, message: `Connected to OpenAI-compatible endpoint at ${url}` };
+    }
+
+    return { reachable: false, models: [], message: `Could not reach a compatible local LLM API at ${url}` };
+  }
+
+  private openChatAnalystPanel(): void {
+    const panel = this.ctx.panelSettings['chat-analyst'];
+    if (panel) {
+      panel.enabled = true;
+      saveToStorage(STORAGE_KEYS.panels, this.ctx.panelSettings);
+      this.applyPanelSettings();
+      this.ctx.unifiedSettings?.refreshPanelToggles();
+    }
+    window.setTimeout(() => {
+      const el = document.querySelector<HTMLElement>('[data-panel="chat-analyst"]');
+      el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+  }
+
+  private closeConnectAiModal(): void {
+    this.connectAiModalEl?.remove();
+    this.connectAiModalEl = null;
+  }
+
+  private openConnectAiModal(): void {
+    if (this.connectAiModalEl) {
+      this.connectAiModalEl.style.display = 'flex';
+      return;
+    }
+
+    const snapshot = getRuntimeConfigSnapshot();
+    const savedUrl = snapshot.secrets.OLLAMA_API_URL?.value || 'http://10.88.111.101:1234';
+    const savedModel = snapshot.secrets.OLLAMA_MODEL?.value || '';
+
+    const modal = document.createElement('div');
+    modal.className = 'wm-connect-ai-modal-backdrop';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:2000;padding:16px;';
+    modal.innerHTML = `
+      <div style="width:min(560px,100%);background:#0f141b;border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:10px;max-height:92vh;overflow:auto;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+          <div>
+            <div style="font-size:15px;font-weight:700;color:#e9f2ff;">Connect Local AI</div>
+            <div style="font-size:11px;color:#9fb0c5;">Connect your local LLM endpoint, then open chat instantly.</div>
+          </div>
+          <button id="wmConnectAiClose" type="button" style="border:1px solid rgba(255,255,255,.15);background:rgba(255,255,255,.04);color:#cfe0f3;border-radius:8px;padding:5px 8px;cursor:pointer;">Close</button>
+        </div>
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:11px;color:#9fb0c5;">
+          Local LLM URL
+          <input id="wmConnectAiUrl" type="text" value="${savedUrl}" placeholder="http://127.0.0.1:11434 or http://10.88.111.101:1234" style="padding:9px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.14);background:#0b1016;color:#e9f2ff;" />
+        </label>
+        <label style="display:flex;flex-direction:column;gap:6px;font-size:11px;color:#9fb0c5;">
+          Model
+          <select id="wmConnectAiModel" style="padding:9px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.14);background:#0b1016;color:#e9f2ff;">
+            <option value="${savedModel}">${savedModel || 'Auto-detect model'}</option>
+          </select>
+        </label>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          <button id="wmConnectAiTest" type="button" style="padding:8px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);color:#e9f2ff;cursor:pointer;">Test Connection</button>
+          <button id="wmConnectAiSave" type="button" style="padding:8px 10px;border-radius:10px;border:1px solid rgba(77,166,255,.38);background:rgba(77,166,255,.15);color:#b6d8ff;cursor:pointer;">Save + Open Chat</button>
+          <button id="wmConnectAiSettings" type="button" style="padding:8px 10px;border-radius:10px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.03);color:#c8d8ea;cursor:pointer;">Advanced Settings</button>
+        </div>
+        <div id="wmConnectAiStatus" style="font-size:11px;color:#9fb0c5;">Enter URL and test connection.</div>
+      </div>
+    `;
+
+    const setStatus = (msg: string, tone: 'neutral' | 'ok' | 'warn' = 'neutral') => {
+      const el = modal.querySelector<HTMLElement>('#wmConnectAiStatus');
+      if (!el) return;
+      el.textContent = msg;
+      el.style.color = tone === 'ok' ? '#7ee3a7' : tone === 'warn' ? '#ffb480' : '#9fb0c5';
+    };
+
+    const loadModelsIntoSelect = (models: string[], selected = '') => {
+      const select = modal.querySelector<HTMLSelectElement>('#wmConnectAiModel');
+      if (!select) return;
+      if (models.length === 0) {
+        select.innerHTML = `<option value="${selected}">${selected || 'Auto-detect model'}</option>`;
+        return;
+      }
+      const current = selected || models[0] || '';
+      select.innerHTML = models.map((m) => `<option value="${m}" ${m === current ? 'selected' : ''}>${m}</option>`).join('');
+    };
+
+    modal.querySelector<HTMLElement>('#wmConnectAiClose')?.addEventListener('click', () => this.closeConnectAiModal());
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) this.closeConnectAiModal();
+    });
+
+    modal.querySelector<HTMLElement>('#wmConnectAiTest')?.addEventListener('click', async () => {
+      const input = modal.querySelector<HTMLInputElement>('#wmConnectAiUrl');
+      const normalized = this.normalizeLocalAiUrl(input?.value || '');
+      if (!normalized) {
+        setStatus('Invalid URL. Example: http://10.88.111.101:1234', 'warn');
+        return;
+      }
+      if (input) input.value = normalized;
+      setStatus(`Testing ${normalized}...`);
+      const probe = await this.probeLocalAi(normalized);
+      if (!probe.reachable) {
+        setStatus(probe.message, 'warn');
+        return;
+      }
+      loadModelsIntoSelect(probe.models, savedModel);
+      setStatus(`${probe.message}${probe.models.length ? ` · ${probe.models.length} model(s)` : ''}`, 'ok');
+    });
+
+    modal.querySelector<HTMLElement>('#wmConnectAiSave')?.addEventListener('click', async () => {
+      const input = modal.querySelector<HTMLInputElement>('#wmConnectAiUrl');
+      const model = modal.querySelector<HTMLSelectElement>('#wmConnectAiModel')?.value.trim() || '';
+      const normalized = this.normalizeLocalAiUrl(input?.value || '');
+      if (!normalized) {
+        setStatus('Invalid URL. Example: http://10.88.111.101:1234', 'warn');
+        return;
+      }
+      if (!isDesktopRuntime()) {
+        setStatus('Local AI runtime secrets are only writable in desktop mode. Open desktop app to save this endpoint.', 'warn');
+        return;
+      }
+      if (input) input.value = normalized;
+      setStatus(`Saving ${normalized}...`);
+      try {
+        await setSecretValue('OLLAMA_API_URL', normalized);
+        if (model) await setSecretValue('OLLAMA_MODEL', model);
+        setFeatureToggle('aiOllama', true);
+        setStatus(`Connected to ${normalized}${model ? ` (${model})` : ''}`, 'ok');
+        this.showToast('Local AI connected. Opening chat panel...');
+        this.openChatAnalystPanel();
+        this.closeConnectAiModal();
+      } catch (error) {
+        console.warn('[connect-ai] failed to save local AI config', error);
+        setStatus('Could not save runtime config. Use Advanced Settings to configure manually.', 'warn');
+      }
+    });
+
+    modal.querySelector<HTMLElement>('#wmConnectAiSettings')?.addEventListener('click', () => {
+      this.closeConnectAiModal();
+      this.ctx.unifiedSettings?.open('settings');
+      window.setTimeout(() => {
+        const urlInput = document.getElementById('usLocalAiUrl') as HTMLInputElement | null;
+        urlInput?.focus();
+      }, 0);
+    });
+
+    document.body.appendChild(modal);
+    this.connectAiModalEl = modal;
   }
 }

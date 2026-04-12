@@ -12,7 +12,7 @@ const _desktop = isDesktopRuntime();
 // Desired order: live-news, AI Insights, AI Strategic Posture, cii, strategic-risk, then rest
 const FULL_PANELS: Record<string, PanelConfig> = {
   // Default 3 panels — always visible on first load
-  'strategic-risk': { name: 'Strategic Risk Overview', enabled: true, priority: 1 },
+  'strategic-risk': { name: 'Global Situations', enabled: true, priority: 1 },
   'stock-monitor': { name: 'Stock Monitor', enabled: true, priority: 1 },
   'stock-global-intelligence': { name: 'Stock Global Intelligence', enabled: true, priority: 1 },
   // All other panels available via panel picker but off by default

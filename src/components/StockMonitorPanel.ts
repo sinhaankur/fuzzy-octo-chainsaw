@@ -7,6 +7,7 @@ import {
   type StockCatalogEntry,
   fetchStockNews,
   getDefaultPortfolioRows,
+  getPortfolioGroupBreakdown,
   getHoldingRiskSnapshot,
   getPortfolioSummary,
   loadPortfolio,
@@ -51,6 +52,28 @@ function formatPublishedDate(value: string | null): string {
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString();
 }
 
+function formatHoldingDays(days: number | null): string {
+  if (days === null || !Number.isFinite(days)) return '—';
+  if (days < 30) return `${days}d`;
+  if (days < 365) return `${Math.round(days / 30)}mo`;
+  return `${(days / 365).toFixed(1)}y`;
+}
+
+function plainTrendLabel(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return 'Flat today';
+  if (value >= 2) return 'Strong up move today';
+  if (value > 0) return 'Up today';
+  if (value <= -2) return 'Strong down move today';
+  if (value < 0) return 'Down today';
+  return 'Flat today';
+}
+
+function plainRiskLabel(level: 'low' | 'medium' | 'high'): string {
+  if (level === 'high') return 'High risk';
+  if (level === 'medium') return 'Medium risk';
+  return 'Lower risk';
+}
+
 export class StockMonitorPanel extends Panel {
   private holdings: PortfolioHolding[] = [];
   private searchQuery = '';
@@ -60,6 +83,12 @@ export class StockMonitorPanel extends Panel {
   private loadingNewsTicker: string | null = null;
   private loadingMessage = 'Loading demo portfolio…';
   private errorMessage: string | null = null;
+  private collapsedSections: Record<string, boolean> = {
+    countries: true,
+    concentration: true,
+    checklist: true,
+    news: false,
+  };
 
   constructor() {
     super({
@@ -89,6 +118,21 @@ export class StockMonitorPanel extends Panel {
 
     this.content.addEventListener('click', (event) => {
       const target = event.target as HTMLElement;
+      const toggleBtn = target.closest<HTMLElement>('[data-toggle-section]');
+      if (toggleBtn?.dataset.toggleSection) {
+        const key = toggleBtn.dataset.toggleSection;
+        this.collapsedSections[key] = !this.collapsedSections[key];
+        this.render();
+        return;
+      }
+
+      const jumpBtn = target.closest<HTMLElement>('[data-jump-section]');
+      if (jumpBtn?.dataset.jumpSection) {
+        const section = this.content.querySelector<HTMLElement>(`[data-detail-section="${jumpBtn.dataset.jumpSection}"]`);
+        section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+
       const addBtn = target.closest<HTMLElement>('[data-add-ticker]');
       if (addBtn?.dataset.addTicker) {
         void this.addStock(addBtn.dataset.addTicker);
@@ -110,6 +154,12 @@ export class StockMonitorPanel extends Panel {
       const loadDemoBtn = target.closest<HTMLElement>('[data-load-demo]');
       if (loadDemoBtn) {
         void this.loadRows(getDefaultPortfolioRows(), 'Loading demo portfolio…');
+        return;
+      }
+
+      const saveHoldingBtn = target.closest<HTMLElement>('[data-save-holding]');
+      if (saveHoldingBtn) {
+        void this.updateSelectedHoldingFromInputs();
       }
     });
 
@@ -198,11 +248,63 @@ export class StockMonitorPanel extends Panel {
       shares: holding.shares,
       currency: holding.quote.currency,
       purchasePrice: holding.purchasePrice,
+      purchaseDate: holding.purchaseDate,
     }));
-    if (!existing.has(ticker)) rows.push({ ticker, shares: 10, purchasePrice: null });
+    if (!existing.has(ticker)) rows.push({ ticker, shares: 10, purchasePrice: null, purchaseDate: null });
     this.searchQuery = '';
     this.searchResults = [];
     await this.loadRows(rows, `Fetching ${ticker}…`);
+  }
+
+  private async updateSelectedHoldingFromInputs(): Promise<void> {
+    const selected = this.holdings.find((holding) => holding.ticker === this.selectedTicker) ?? this.holdings[0] ?? null;
+    if (!selected) return;
+
+    const sharesInput = this.content.querySelector<HTMLInputElement>('[data-edit-shares]');
+    const purchaseInput = this.content.querySelector<HTMLInputElement>('[data-edit-purchase-price]');
+    const purchaseDateInput = this.content.querySelector<HTMLInputElement>('[data-edit-purchase-date]');
+    if (!sharesInput || !purchaseInput || !purchaseDateInput) return;
+
+    const parsedShares = Number(sharesInput.value);
+    if (!Number.isFinite(parsedShares) || parsedShares <= 0) {
+      this.errorMessage = 'Shares must be a number greater than 0.';
+      this.render();
+      return;
+    }
+
+    const purchaseRaw = purchaseInput.value.trim();
+    const parsedPurchase = purchaseRaw === '' ? null : Number(purchaseRaw);
+    if (parsedPurchase !== null && (!Number.isFinite(parsedPurchase) || parsedPurchase <= 0)) {
+      this.errorMessage = 'Purchase price must be empty or a number greater than 0.';
+      this.render();
+      return;
+    }
+
+    const purchaseDateRaw = purchaseDateInput.value.trim();
+    const parsedPurchaseDate = purchaseDateRaw === '' ? null : purchaseDateRaw;
+    if (parsedPurchaseDate) {
+      const parsedDate = new Date(parsedPurchaseDate);
+      if (Number.isNaN(parsedDate.getTime())) {
+        this.errorMessage = 'Purchase date must be a valid date.';
+        this.render();
+        return;
+      }
+      if (parsedDate.getTime() > Date.now()) {
+        this.errorMessage = 'Purchase date cannot be in the future.';
+        this.render();
+        return;
+      }
+    }
+
+    const rows: PortfolioRowInput[] = this.holdings.map((holding) => ({
+      ticker: holding.ticker,
+      shares: holding.ticker === selected.ticker ? parsedShares : holding.shares,
+      currency: holding.quote.currency,
+      purchasePrice: holding.ticker === selected.ticker ? parsedPurchase : holding.purchasePrice,
+      purchaseDate: holding.ticker === selected.ticker ? parsedPurchaseDate : holding.purchaseDate,
+    }));
+
+    await this.loadRows(rows, `Updating ${selected.ticker}…`);
   }
 
   private async loadRows(rows: PortfolioRowInput[], initialMessage: string): Promise<void> {
@@ -305,11 +407,69 @@ export class StockMonitorPanel extends Panel {
     const summary = getPortfolioSummary(this.holdings);
     const risk = getHoldingRiskSnapshot(selected, this.holdings);
     const news = this.newsByTicker.get(selected.ticker) ?? [];
+    const topImpactNews = [...news].sort((a, b) => b.impactScore - a.impactScore)[0] ?? null;
     const quoteTone = toneClass(selected.quote.changePercent);
     const returnTone = toneClass(selected.allTimeReturnPct);
+    const annualizedTone = toneClass(selected.annualizedReturnPct);
+    const topCountry = summary.topCountries[0] ?? null;
+    const isCountriesCollapsed = this.collapsedSections.countries;
+    const isConcentrationCollapsed = this.collapsedSections.concentration;
+    const isChecklistCollapsed = this.collapsedSections.checklist;
+    const isNewsCollapsed = this.collapsedSections.news;
+    const quickTake = [
+      `${plainTrendLabel(selected.quote.changePercent)} (${formatPct(selected.quote.changePercent)}).`,
+      selected.allTimeReturnPct === null
+        ? 'Add purchase price to see return from your entry.'
+        : `Since your buy, return is ${formatPct(selected.allTimeReturnPct)}.`,
+      selected.purchaseDate
+        ? `Held for ${formatHoldingDays(selected.holdingDays)} since ${escapeHtml(selected.purchaseDate)}.`
+        : 'Add purchase date to measure holding period and annualized return.',
+      `Portfolio weight is ${risk.positionWeightPct.toFixed(1)}% (${plainRiskLabel(risk.concentrationRisk)} concentration).`,
+      topCountry
+        ? `Top country exposure: ${escapeHtml(topCountry.name)} (${formatMoney(topCountry.value, selected.quote.currency)}).`
+        : 'Country exposure not available yet.',
+      topImpactNews
+        ? `Most impactful event: ${escapeHtml(topImpactNews.title)} (impact ${topImpactNews.impactScore}/100).`
+        : 'No major headline impact detected yet.',
+    ];
 
     return `
-      <div style="display:flex;flex-direction:column;gap:12px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03)">
+      <div style="display:flex;flex-direction:column;gap:12px;padding:12px;border-radius:12px;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);max-height:min(78vh,980px);overflow:auto;scroll-behavior:smooth">
+        <div style="display:flex;flex-wrap:wrap;gap:6px;padding:8px;border-radius:10px;background:rgba(13,17,23,0.5);border:1px solid rgba(255,255,255,0.08);position:sticky;top:0;z-index:1;backdrop-filter:blur(4px)">
+          <button type="button" data-jump-section="summary" style="padding:5px 8px;border-radius:999px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);color:var(--text);font-size:10px;cursor:pointer">Summary</button>
+          <button type="button" data-jump-section="holding" style="padding:5px 8px;border-radius:999px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);color:var(--text);font-size:10px;cursor:pointer">Holding</button>
+          <button type="button" data-jump-section="risk" style="padding:5px 8px;border-radius:999px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);color:var(--text);font-size:10px;cursor:pointer">Risk</button>
+          <button type="button" data-jump-section="alerts" style="padding:5px 8px;border-radius:999px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);color:var(--text);font-size:10px;cursor:pointer">Alerts</button>
+          <button type="button" data-jump-section="news" style="padding:5px 8px;border-radius:999px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);color:var(--text);font-size:10px;cursor:pointer">News</button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;padding:8px;border-radius:10px;background:rgba(13,17,23,0.6);border:1px solid rgba(255,255,255,0.08);position:sticky;top:44px;z-index:1;backdrop-filter:blur(4px)">
+          <div style="padding:6px 8px;border-radius:8px;background:rgba(255,255,255,0.03)">
+            <div style="font-size:9px;color:var(--text-dim)">Price</div>
+            <div style="font-size:11px;font-weight:700;color:var(--text)">${formatMoney(selected.quote.price, selected.quote.currency)}</div>
+          </div>
+          <div style="padding:6px 8px;border-radius:8px;background:rgba(255,255,255,0.03)">
+            <div style="font-size:9px;color:var(--text-dim)">Return</div>
+            <div style="font-size:11px;font-weight:700;color:${returnTone === 'positive' ? 'var(--green)' : returnTone === 'negative' ? 'var(--red)' : 'var(--text)'}">${formatPct(selected.allTimeReturnPct)}</div>
+          </div>
+          <div style="padding:6px 8px;border-radius:8px;background:rgba(255,255,255,0.03)">
+            <div style="font-size:9px;color:var(--text-dim)">Risk</div>
+            <div style="font-size:11px;font-weight:700;color:${risk.overallLevel === 'high' ? 'var(--red)' : risk.overallLevel === 'medium' ? 'var(--warning, #ffcc00)' : '#4da6ff'}">${escapeHtml(risk.overallLevel.toUpperCase())}</div>
+          </div>
+          <div style="padding:6px 8px;border-radius:8px;background:rgba(255,255,255,0.03)">
+            <div style="font-size:9px;color:var(--text-dim)">Top alert</div>
+            <div style="font-size:11px;font-weight:700;color:var(--text)">${topImpactNews ? `${topImpactNews.impactScore}/100` : '—'}</div>
+          </div>
+        </div>
+
+        <div data-detail-section="summary" style="height:1px"></div>
+        <div style="padding:10px;border-radius:10px;background:rgba(77,166,255,0.08);border:1px solid rgba(77,166,255,0.25)">
+          <div style="font-size:11px;font-weight:700;color:#9bc9ff;margin-bottom:6px">Understand this stock quickly</div>
+          <div style="display:flex;flex-direction:column;gap:4px;font-size:10px;color:var(--text);line-height:1.5">
+            ${quickTake.map((line) => `<div>• ${line}</div>`).join('')}
+          </div>
+        </div>
+
         <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
           <div>
             <div style="font-size:14px;font-weight:700;color:var(--text)">${escapeHtml(selected.companyName)}</div>
@@ -331,6 +491,7 @@ export class StockMonitorPanel extends Panel {
             <div style="font-size:10px;color:var(--text-dim)">All-time return</div>
             <div style="font-size:16px;font-weight:700;color:${returnTone === 'positive' ? 'var(--green)' : returnTone === 'negative' ? 'var(--red)' : 'var(--text)'}">${formatPct(selected.allTimeReturnPct)}</div>
             <div style="font-size:11px;color:var(--text-dim)">${selected.purchasePrice ? `Cost basis ${formatMoney(selected.purchasePrice, selected.quote.currency)}` : 'No purchase price provided'}</div>
+            <div style="font-size:10px;color:${annualizedTone === 'positive' ? 'var(--green)' : annualizedTone === 'negative' ? 'var(--red)' : 'var(--text-dim)'};margin-top:3px">Annualized: ${formatPct(selected.annualizedReturnPct)} · Held ${formatHoldingDays(selected.holdingDays)}</div>
           </div>
         </div>
 
@@ -347,6 +508,30 @@ export class StockMonitorPanel extends Panel {
           </div>
         </div>
 
+        <div data-detail-section="holding" style="padding:10px;border-radius:10px;background:rgba(13,17,23,0.55)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <div style="font-size:11px;font-weight:700;color:var(--text)">Your holding</div>
+            <button type="button" data-save-holding style="padding:6px 10px;border-radius:8px;border:1px solid rgba(77,166,255,0.35);background:rgba(77,166,255,0.12);color:#7bb7ff;font-size:10px;cursor:pointer">Save changes</button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px">
+            <label style="display:flex;flex-direction:column;gap:6px;font-size:10px;color:var(--text-dim)">
+              Shares held
+              <input data-edit-shares type="number" min="0.0001" step="0.0001" value="${selected.shares}" style="padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.03);color:var(--text);font-size:11px" />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:6px;font-size:10px;color:var(--text-dim)">
+              Purchase price (${escapeHtml(selected.quote.currency)})
+              <input data-edit-purchase-price type="number" min="0" step="0.01" value="${selected.purchasePrice ?? ''}" placeholder="Optional" style="padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.03);color:var(--text);font-size:11px" />
+            </label>
+          </div>
+          <div style="margin-top:8px;display:grid;grid-template-columns:minmax(0,1fr);gap:8px">
+            <label style="display:flex;flex-direction:column;gap:6px;font-size:10px;color:var(--text-dim)">
+              Purchase date
+              <input data-edit-purchase-date type="date" value="${selected.purchaseDate ?? ''}" style="padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.03);color:var(--text);font-size:11px" />
+            </label>
+          </div>
+          <div style="margin-top:6px;font-size:10px;color:var(--text-dim)">Update shares, cost basis, and buy date so returns reflect when you bought the stock.</div>
+        </div>
+
         <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;font-size:11px">
           <div style="padding:10px;border-radius:10px;background:rgba(13,17,23,0.55)">
             <div style="font-size:10px;color:var(--text-dim)">Market cap / range</div>
@@ -361,29 +546,39 @@ export class StockMonitorPanel extends Panel {
         </div>
 
         <div>
-          <div style="font-size:11px;font-weight:700;color:var(--text);margin-bottom:8px">Related countries and industry exposure</div>
-          <div style="display:flex;flex-direction:column;gap:8px">
-            ${selected.relatedCountries.map((country) => `
-              <div style="padding:8px 10px;border-radius:10px;background:rgba(13,17,23,0.55);border:1px solid rgba(255,255,255,0.06)">
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px">
-                  <span style="font-size:11px;font-weight:700;color:var(--text)">${escapeHtml(country.name)}</span>
-                  <span style="font-size:10px;color:${country.risk === 'high' ? 'var(--red)' : country.risk === 'medium' ? 'var(--warning, #ffcc00)' : '#4da6ff'}">${escapeHtml(country.relationship)} · ${escapeHtml(country.risk)}</span>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <div style="font-size:11px;font-weight:700;color:var(--text)">Related countries and industry exposure</div>
+            <button type="button" data-toggle-section="countries" style="padding:4px 8px;border-radius:999px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);color:var(--text);font-size:10px;cursor:pointer">${isCountriesCollapsed ? 'Expand' : 'Collapse'}</button>
+          </div>
+          ${isCountriesCollapsed ? `<div style="font-size:10px;color:var(--text-dim)">Collapsed to keep scrolling shorter.</div>` : `
+            <div style="display:flex;flex-direction:column;gap:8px">
+              ${selected.relatedCountries.map((country) => `
+                <div style="padding:8px 10px;border-radius:10px;background:rgba(13,17,23,0.55);border:1px solid rgba(255,255,255,0.06)">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px">
+                    <span style="font-size:11px;font-weight:700;color:var(--text)">${escapeHtml(country.name)}</span>
+                    <span style="font-size:10px;color:${country.risk === 'high' ? 'var(--red)' : country.risk === 'medium' ? 'var(--warning, #ffcc00)' : '#4da6ff'}">${escapeHtml(country.relationship)} · ${escapeHtml(country.risk)}</span>
+                  </div>
+                  <div style="font-size:10px;color:var(--text-dim);line-height:1.45">${escapeHtml(country.note)}</div>
                 </div>
-                <div style="font-size:10px;color:var(--text-dim);line-height:1.45">${escapeHtml(country.note)}</div>
-              </div>
-            `).join('')}
-          </div>
+              `).join('')}
+            </div>
+          `}
         </div>
 
         <div style="padding:10px;border-radius:10px;background:rgba(13,17,23,0.55)">
-          <div style="font-size:11px;font-weight:700;color:var(--text);margin-bottom:6px">Portfolio concentration snapshot</div>
-          <div style="font-size:10px;color:var(--text-dim);line-height:1.6">
-            Total tracked value: ${formatMoney(summary.totalValue || 0, selected.quote.currency)}<br/>
-            Top exposed countries: ${summary.topCountries.length > 0 ? summary.topCountries.map((item) => `${escapeHtml(item.name)} (${formatMoney(item.value, selected.quote.currency)})`).join(' · ') : 'None yet'}
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
+            <div style="font-size:11px;font-weight:700;color:var(--text)">Portfolio concentration snapshot</div>
+            <button type="button" data-toggle-section="concentration" style="padding:4px 8px;border-radius:999px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);color:var(--text);font-size:10px;cursor:pointer">${isConcentrationCollapsed ? 'Expand' : 'Collapse'}</button>
           </div>
+          ${isConcentrationCollapsed ? `<div style="font-size:10px;color:var(--text-dim)">Collapsed. Expand to view country concentration details.</div>` : `
+            <div style="font-size:10px;color:var(--text-dim);line-height:1.6">
+              Total tracked value: ${formatMoney(summary.totalValue || 0, selected.quote.currency)}<br/>
+              Top exposed countries: ${summary.topCountries.length > 0 ? summary.topCountries.map((item) => `${escapeHtml(item.name)} (${formatMoney(item.value, selected.quote.currency)})`).join(' · ') : 'None yet'}
+            </div>
+          `}
         </div>
 
-        <div style="padding:10px;border-radius:10px;background:rgba(13,17,23,0.55)">
+        <div data-detail-section="risk" style="padding:10px;border-radius:10px;background:rgba(13,17,23,0.55)">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
             <div style="font-size:11px;font-weight:700;color:var(--text)">Exposure and risk</div>
             <div style="font-size:10px;color:${risk.overallLevel === 'high' ? 'var(--red)' : risk.overallLevel === 'medium' ? 'var(--warning, #ffcc00)' : '#4da6ff'}">${escapeHtml(risk.overallLevel.toUpperCase())} · ${risk.overallScore}/100</div>
@@ -405,29 +600,66 @@ export class StockMonitorPanel extends Panel {
               </div>
             `).join('')}
           </div>
-          <div style="margin-top:8px;font-size:10px;color:var(--text-dim)">Concentration risk: ${escapeHtml(risk.concentrationRisk)}</div>
+          <div style="margin-top:8px;font-size:10px;color:var(--text-dim)">Concentration risk: ${escapeHtml(risk.concentrationRisk)}${selected.purchaseDate ? ` · Bought ${escapeHtml(selected.purchaseDate)}` : ''}</div>
         </div>
 
         <div style="padding:10px;border-radius:10px;background:rgba(13,17,23,0.55)">
-          <div style="font-size:11px;font-weight:700;color:var(--text);margin-bottom:8px">Stock news</div>
-          ${this.loadingNewsTicker === selected.ticker ? '<div style="font-size:10px;color:var(--text-dim)">Loading recent headlines…</div>' : ''}
-          ${this.loadingNewsTicker !== selected.ticker && news.length === 0 ? '<div style="font-size:10px;color:var(--text-dim)">No recent headlines available from Google News right now.</div>' : ''}
-          ${news.length > 0 ? `
-            <div style="display:flex;flex-direction:column;gap:8px">
-              ${news.map((item) => `
-                <a href="${escapeHtml(item.url)}" target="_blank" rel="noopener" style="display:block;padding:8px 10px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);text-decoration:none">
-                  <div style="font-size:11px;font-weight:700;color:var(--text);line-height:1.4">${escapeHtml(item.title)}</div>
-                  <div style="margin-top:4px;font-size:10px;color:var(--text-dim)">${escapeHtml(item.source)}${formatPublishedDate(item.publishedAt) ? ` · ${escapeHtml(formatPublishedDate(item.publishedAt))}` : ''}</div>
-                </a>
-              `).join('')}
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <div style="font-size:11px;font-weight:700;color:var(--text)">Simple checklist</div>
+            <button type="button" data-toggle-section="checklist" style="padding:4px 8px;border-radius:999px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);color:var(--text);font-size:10px;cursor:pointer">${isChecklistCollapsed ? 'Expand' : 'Collapse'}</button>
+          </div>
+          ${isChecklistCollapsed ? `<div style="font-size:10px;color:var(--text-dim)">Collapsed. Expand for decision checkpoints.</div>` : `
+            <div style="display:flex;flex-direction:column;gap:6px;font-size:10px;color:var(--text-dim)">
+              <div>1. Is today trend acceptable for your plan? ${formatPct(selected.quote.changePercent)}</div>
+              <div>2. Are you comfortable with this position size? ${risk.positionWeightPct.toFixed(1)}% of tracked portfolio.</div>
+              <div>3. Is country exposure acceptable right now? ${plainRiskLabel(risk.overallLevel)} overall.</div>
+              <div>4. Do recent headlines support your thesis?${topImpactNews ? ` Top impact: ${escapeHtml(topImpactNews.impactScore.toString())}/100.` : ''}</div>
             </div>
-          ` : ''}
+          `}
+        </div>
+
+        <div data-detail-section="alerts" style="padding:10px;border-radius:10px;background:${topImpactNews ? 'rgba(255,198,92,0.12)' : 'rgba(13,17,23,0.55)'};border:1px solid ${topImpactNews ? 'rgba(255,198,92,0.3)' : 'rgba(255,255,255,0.08)'}">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <div style="font-size:11px;font-weight:700;color:var(--text)">Stock alerts</div>
+            ${topImpactNews ? `<div style="font-size:10px;color:var(--warning, #ffcc00)">Impact ${topImpactNews.impactScore}/100</div>` : ''}
+          </div>
+          ${topImpactNews ? `
+            <a href="${escapeHtml(topImpactNews.url)}" target="_blank" rel="noopener" style="display:block;text-decoration:none;padding:8px 10px;border-radius:10px;border:1px solid rgba(255,255,255,0.08);background:rgba(0,0,0,0.12)">
+              <div style="font-size:11px;font-weight:700;color:var(--text);line-height:1.4">${escapeHtml(topImpactNews.title)}</div>
+              <div style="margin-top:6px;font-size:10px;color:var(--text-dim)">${escapeHtml(topImpactNews.source)}${formatPublishedDate(topImpactNews.publishedAt) ? ` · ${escapeHtml(formatPublishedDate(topImpactNews.publishedAt))}` : ''} · ${escapeHtml(topImpactNews.impactReason)}</div>
+            </a>
+          ` : `
+            <div style="font-size:10px;color:var(--text-dim)">No high-impact event detected yet for this stock. Alerts will highlight the strongest headline when available.</div>
+          `}
+        </div>
+
+        <div data-detail-section="news" style="padding:10px;border-radius:10px;background:rgba(13,17,23,0.55)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <div style="font-size:11px;font-weight:700;color:var(--text)">Stock news</div>
+            <button type="button" data-toggle-section="news" style="padding:4px 8px;border-radius:999px;border:1px solid rgba(255,255,255,0.12);background:rgba(255,255,255,0.04);color:var(--text);font-size:10px;cursor:pointer">${isNewsCollapsed ? 'Expand' : 'Collapse'}</button>
+          </div>
+          ${isNewsCollapsed ? `<div style="font-size:10px;color:var(--text-dim)">Collapsed. Expand to read full headline list.</div>` : `
+            ${this.loadingNewsTicker === selected.ticker ? '<div style="font-size:10px;color:var(--text-dim)">Loading recent headlines…</div>' : ''}
+            ${this.loadingNewsTicker !== selected.ticker && news.length === 0 ? '<div style="font-size:10px;color:var(--text-dim)">No recent headlines available from Google News right now.</div>' : ''}
+            ${news.length > 0 ? `
+              <div style="display:flex;flex-direction:column;gap:8px">
+                ${news.map((item) => `
+                  <a href="${escapeHtml(item.url)}" target="_blank" rel="noopener" style="display:block;padding:8px 10px;border-radius:10px;border:1px solid rgba(255,255,255,0.06);background:rgba(255,255,255,0.02);text-decoration:none">
+                    <div style="font-size:11px;font-weight:700;color:var(--text);line-height:1.4">${escapeHtml(item.title)}</div>
+                    <div style="margin-top:4px;font-size:10px;color:var(--text-dim)">${escapeHtml(item.source)}${formatPublishedDate(item.publishedAt) ? ` · ${escapeHtml(formatPublishedDate(item.publishedAt))}` : ''} · Impact ${item.impactScore}/100</div>
+                  </a>
+                `).join('')}
+              </div>
+            ` : ''}
+          `}
         </div>
       </div>
     `;
   }
 
   private render(): void {
+    const groups = getPortfolioGroupBreakdown(this.holdings);
+    const selectedCurrency = this.holdings[0]?.quote.currency ?? 'USD';
     const html = `
       <div style="display:flex;flex-direction:column;gap:12px">
         <div style="padding:12px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08)">
@@ -438,13 +670,38 @@ export class StockMonitorPanel extends Panel {
               <input data-stock-csv type="file" accept=".csv,text/csv" style="display:none" />
             </label>
           </div>
-          <div style="margin-top:8px;font-size:10px;color:var(--text-dim)">CSV columns: Ticker, Shares, Currency, Purchase Price</div>
+          <div style="margin-top:8px;font-size:10px;color:var(--text-dim)">CSV columns: Ticker, Shares, Currency, Purchase Price, Purchase Date</div>
           ${this.renderSearchResults()}
+        </div>
+
+        <div style="padding:10px;border-radius:12px;background:rgba(13,17,23,0.55);border:1px solid rgba(255,255,255,0.08)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px">
+            <div style="font-size:11px;font-weight:700;color:var(--text)">Portfolio groups</div>
+            <div style="font-size:10px;color:var(--text-dim)">${groups.length} group${groups.length === 1 ? '' : 's'}</div>
+          </div>
+          ${groups.length === 0 ? `
+            <div style="font-size:10px;color:var(--text-dim)">Upload or add stocks to automatically break down your portfolio by groups like Energy, ETF & Funds, Technology, and more.</div>
+          ` : `
+            <div style="display:flex;flex-direction:column;gap:6px">
+              ${groups.map((group) => `
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 9px;border-radius:9px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06)">
+                  <div style="display:flex;flex-direction:column;gap:2px">
+                    <div style="font-size:11px;font-weight:700;color:var(--text)">${escapeHtml(group.label)}</div>
+                    <div style="font-size:10px;color:var(--text-dim)">${group.holdings} holding${group.holdings === 1 ? '' : 's'}</div>
+                  </div>
+                  <div style="text-align:right">
+                    <div style="font-size:11px;font-weight:700;color:var(--text)">${group.weightPct.toFixed(1)}%</div>
+                    <div style="font-size:10px;color:var(--text-dim)">${formatMoney(group.value, selectedCurrency)}</div>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          `}
         </div>
 
         ${this.errorMessage ? `<div style="font-size:11px;color:var(--red);padding:10px 12px;border-radius:10px;background:rgba(255,68,68,0.08);border:1px solid rgba(255,68,68,0.18)">${escapeHtml(this.errorMessage)}</div>` : ''}
 
-        <div style="display:grid;grid-template-columns:minmax(0,1fr);gap:12px">
+        <div style="display:grid;grid-template-columns:1fr;gap:12px">
           <div>
             <div style="font-size:11px;font-weight:700;color:var(--text);margin-bottom:8px">Tracked stocks</div>
             ${this.renderHoldings()}

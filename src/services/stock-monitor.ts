@@ -47,6 +47,8 @@ export interface StockNewsItem {
   url: string;
   source: string;
   publishedAt: string | null;
+  impactScore: number;
+  impactReason: string;
 }
 
 export interface StockRiskSnapshot {
@@ -62,19 +64,38 @@ export interface StockRiskSnapshot {
   }>;
 }
 
+export interface PortfolioGroupBreakdown {
+  key: string;
+  label: string;
+  value: number;
+  weightPct: number;
+  holdings: number;
+}
+
 export interface PortfolioRowInput {
   ticker: string;
   shares: number;
   currency?: string;
   purchasePrice?: number | null;
+  purchaseDate?: string | null;
 }
 
 export interface PortfolioHolding extends StockCatalogEntry {
   shares: number;
   purchasePrice: number | null;
+  purchaseDate: string | null;
   quote: StockQuoteSnapshot;
   positionValue: number;
   allTimeReturnPct: number | null;
+  holdingDays: number | null;
+  annualizedReturnPct: number | null;
+}
+
+function normalizePurchaseDate(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
 }
 
 const STOCK_CATALOG: StockCatalogEntry[] = [
@@ -359,11 +380,11 @@ export function searchStockCatalog(query: string): StockCatalogEntry[] {
 
 export function getDefaultPortfolioRows(): PortfolioRowInput[] {
   return [
-    { ticker: 'AAPL', shares: 18, currency: 'USD', purchasePrice: 184 },
-    { ticker: 'NVDA', shares: 10, currency: 'USD', purchasePrice: 124 },
-    { ticker: 'GOOGL', shares: 8, currency: 'USD', purchasePrice: 168 },
-    { ticker: 'ENB', shares: 42, currency: 'USD', purchasePrice: 47.1 },
-    { ticker: 'ASML', shares: 3, currency: 'USD', purchasePrice: 715 },
+    { ticker: 'AAPL', shares: 18, currency: 'USD', purchasePrice: 184, purchaseDate: '2024-06-12' },
+    { ticker: 'NVDA', shares: 10, currency: 'USD', purchasePrice: 124, purchaseDate: '2024-11-05' },
+    { ticker: 'GOOGL', shares: 8, currency: 'USD', purchasePrice: 168, purchaseDate: '2025-02-03' },
+    { ticker: 'ENB', shares: 42, currency: 'USD', purchasePrice: 47.1, purchaseDate: '2023-09-15' },
+    { ticker: 'ASML', shares: 3, currency: 'USD', purchasePrice: 715, purchaseDate: '2024-01-24' },
   ];
 }
 
@@ -411,18 +432,31 @@ export async function buildPortfolioHolding(row: PortfolioRowInput): Promise<Por
   const quote = await fetchStockQuote(entry);
   const shares = Number.isFinite(row.shares) ? row.shares : 0;
   const purchasePrice = row.purchasePrice ?? null;
+  const purchaseDate = normalizePurchaseDate(row.purchaseDate ?? null);
   const positionValue = quote.price * shares;
   const allTimeReturnPct = purchasePrice && purchasePrice > 0
     ? ((quote.price - purchasePrice) / purchasePrice) * 100
     : null;
+  const holdingDays = purchaseDate
+    ? Math.max(0, Math.floor((Date.now() - new Date(`${purchaseDate}T00:00:00Z`).getTime()) / (1000 * 60 * 60 * 24)))
+    : null;
+  const annualizedReturnPct = (() => {
+    if (allTimeReturnPct === null || holdingDays === null || holdingDays <= 0) return null;
+    if (purchasePrice === null || purchasePrice <= 0) return null;
+    const costBasis = purchasePrice;
+    return (Math.pow(quote.price / costBasis, 365 / holdingDays) - 1) * 100;
+  })();
 
   return {
     ...entry,
     shares,
     purchasePrice,
+    purchaseDate,
     quote,
     positionValue,
     allTimeReturnPct,
+    holdingDays,
+    annualizedReturnPct,
   };
 }
 
@@ -466,12 +500,14 @@ export function parsePortfolioCsv(csvText: string): PortfolioRowInput[] {
     const sharesValue = Number.parseFloat(String(readFirst(row, ['shares', 'qty', 'quantity'])));
     const purchaseValue = readFirst(row, ['purchase price', 'purchase_price', 'avg cost', 'cost']);
     const purchasePrice = purchaseValue === '' ? null : Number.parseFloat(String(purchaseValue));
+    const purchaseDate = normalizePurchaseDate(readFirst(row, ['purchase date', 'purchase_date', 'buy date', 'buy_date', 'bought date', 'bought_date']) || null);
     const currency = String(readFirst(row, ['currency'])).toUpperCase() || undefined;
     return {
       ticker,
       shares: Number.isFinite(sharesValue) ? sharesValue : 0,
       currency,
       purchasePrice: Number.isFinite(purchasePrice ?? NaN) ? purchasePrice : null,
+      purchaseDate,
     };
   }).filter((row) => row.ticker);
 }
@@ -492,6 +528,70 @@ export function getPortfolioSummary(holdings: PortfolioHolding[]): { totalValue:
       .sort((a, b) => b.value - a.value)
       .slice(0, 3),
   };
+}
+
+function normalizeGroupLabel(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function classifyHoldingGroup(holding: PortfolioHolding): string {
+  const sector = normalizeGroupLabel(holding.sector);
+  const industry = normalizeGroupLabel(holding.industry);
+  const company = normalizeGroupLabel(holding.companyName);
+  const ticker = normalizeGroupLabel(holding.ticker);
+
+  if (industry.includes('etf') || industry.includes('fund') || company.includes('yieldmax') || ticker.endsWith('y')) {
+    return 'ETF & Funds';
+  }
+  if (sector.includes('energy') || industry.includes('pipeline') || industry.includes('oil') || industry.includes('gas')) {
+    return 'Energy';
+  }
+  if (industry.includes('semiconductor') || industry.includes('cloud') || sector.includes('technology')) {
+    return 'Technology';
+  }
+  if (sector.includes('financial')) {
+    return 'Financials';
+  }
+  if (sector.includes('health')) {
+    return 'Healthcare';
+  }
+  if (sector.includes('industrial') || industry.includes('shipping') || industry.includes('aerospace')) {
+    return 'Industrials';
+  }
+  if (sector.includes('consumer')) {
+    return 'Consumer';
+  }
+  if (sector.includes('utility')) {
+    return 'Utilities';
+  }
+  if (sector.includes('communication')) {
+    return 'Communication Services';
+  }
+  return 'Other';
+}
+
+export function getPortfolioGroupBreakdown(holdings: PortfolioHolding[]): PortfolioGroupBreakdown[] {
+  const totalValue = holdings.reduce((sum, holding) => sum + holding.positionValue, 0);
+  if (totalValue <= 0) return [];
+
+  const grouped = new Map<string, { value: number; holdings: number }>();
+  for (const holding of holdings) {
+    const label = classifyHoldingGroup(holding);
+    const current = grouped.get(label) ?? { value: 0, holdings: 0 };
+    current.value += holding.positionValue;
+    current.holdings += 1;
+    grouped.set(label, current);
+  }
+
+  return [...grouped.entries()]
+    .map(([label, aggregate]) => ({
+      key: label.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+      label,
+      value: aggregate.value,
+      holdings: aggregate.holdings,
+      weightPct: (aggregate.value / totalValue) * 100,
+    }))
+    .sort((a, b) => b.value - a.value);
 }
 
 function riskToScore(risk: StockRiskLevel): number {
@@ -543,12 +643,75 @@ export async function fetchStockNews(entry: StockCatalogEntry): Promise<StockNew
     const doc = parser.parseFromString(xml, 'application/xml');
     const items = Array.from(doc.querySelectorAll('item')).slice(0, 4);
 
-    return items.map((item) => ({
-      title: item.querySelector('title')?.textContent?.trim() || 'Untitled story',
-      url: item.querySelector('link')?.textContent?.trim() || '#',
-      source: item.querySelector('source')?.textContent?.trim() || 'Google News',
-      publishedAt: item.querySelector('pubDate')?.textContent?.trim() || null,
-    })).filter((item) => item.url !== '#');
+    const computeImpact = (title: string, publishedAt: string | null): { score: number; reason: string } => {
+      const text = title.toLowerCase();
+      let score = 35;
+      const reasons: string[] = [];
+
+      const highImpact = [
+        'guidance', 'earnings', 'downgrade', 'upgrade', 'sec', 'lawsuit', 'tariff', 'sanction',
+        'acquisition', 'merger', 'rate hike', 'rate cut', 'export control', 'recall', 'bankrupt',
+      ];
+      const mediumImpact = [
+        'forecast', 'outlook', 'regulation', 'investigation', 'partnership', 'contract', 'chip', 'ai',
+        'supply chain', 'strike', 'conflict', 'war', 'oil', 'inflation',
+      ];
+
+      const highHits = highImpact.filter((keyword) => text.includes(keyword)).length;
+      const mediumHits = mediumImpact.filter((keyword) => text.includes(keyword)).length;
+      if (highHits > 0) {
+        score += Math.min(30, highHits * 12);
+        reasons.push('major market-moving keyword');
+      }
+      if (mediumHits > 0) {
+        score += Math.min(18, mediumHits * 6);
+        reasons.push('relevant macro/sector signal');
+      }
+
+      const geoHits = entry.relatedCountries
+        .map((country) => country.name.toLowerCase())
+        .filter((countryName) => text.includes(countryName)).length;
+      if (geoHits > 0) {
+        score += Math.min(12, geoHits * 4);
+        reasons.push('matches your exposure geography');
+      }
+
+      if (publishedAt) {
+        const publishedMs = new Date(publishedAt).getTime();
+        if (Number.isFinite(publishedMs)) {
+          const ageHours = (Date.now() - publishedMs) / (1000 * 60 * 60);
+          if (ageHours <= 6) {
+            score += 14;
+            reasons.push('very recent');
+          } else if (ageHours <= 24) {
+            score += 8;
+            reasons.push('recent');
+          } else if (ageHours <= 72) {
+            score += 3;
+          }
+        }
+      }
+
+      const bounded = Math.max(0, Math.min(100, Math.round(score)));
+      return {
+        score: bounded,
+        reason: reasons.slice(0, 2).join(' + ') || 'general relevance',
+      };
+    };
+
+    return items.map((item) => {
+      const title = item.querySelector('title')?.textContent?.trim() || 'Untitled story';
+      const publishedAt = item.querySelector('pubDate')?.textContent?.trim() || null;
+      const { score, reason } = computeImpact(title, publishedAt);
+      return {
+        title,
+        url: item.querySelector('link')?.textContent?.trim() || '#',
+        source: item.querySelector('source')?.textContent?.trim() || 'Google News',
+        publishedAt,
+        impactScore: score,
+        impactReason: reason,
+      };
+    }).filter((item) => item.url !== '#');
   } catch {
     return [];
   }
