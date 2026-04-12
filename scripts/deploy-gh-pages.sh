@@ -7,7 +7,12 @@ cd "$ROOT_DIR"
 REMOTE_URL="$(git remote get-url origin)"
 REPO_NAME="$(printf '%s' "$REMOTE_URL" | sed -E 's#^.*/([^/]+)\.git$#\1#; s#^.*/([^/]+)$#\1#')"
 OWNER_NAME="$(printf '%s' "$REMOTE_URL" | sed -E 's#^.*[:/]([^/]+)/[^/]+(\.git)?$#\1#')"
-BASE_PATH="/${REPO_NAME}/"
+PAGES_REPO="${GH_PAGES_REPO:-$REPO_NAME}"
+BASE_PATH="${GH_PAGES_BASE_PATH:-/$PAGES_REPO/}"
+if [[ "$BASE_PATH" != "/" ]]; then
+  BASE_PATH="/${BASE_PATH#/}"
+  BASE_PATH="${BASE_PATH%/}/"
+fi
 WEB_API_URL="${VITE_WS_API_URL:-https://api.worldmonitor.app}"
 
 TMP_WORKTREE="$(mktemp -d /tmp/wm-gh-pages.XXXXXX)"
@@ -18,6 +23,7 @@ cleanup() {
 trap cleanup EXIT
 
 echo "[deploy] Repo: ${OWNER_NAME}/${REPO_NAME}"
+echo "[deploy] Pages repo path: ${PAGES_REPO}"
 echo "[deploy] Base path: ${BASE_PATH}"
 echo "[deploy] API base: ${WEB_API_URL}"
 
@@ -45,4 +51,8 @@ fi
 git commit -m "Deploy app build to GitHub Pages"
 git push origin gh-pages --force-with-lease
 
-echo "[deploy] Done: https://${OWNER_NAME}.github.io/${REPO_NAME}/"
+if [[ "$BASE_PATH" == "/" ]]; then
+  echo "[deploy] Done: https://${OWNER_NAME}.github.io/"
+else
+  echo "[deploy] Done: https://${OWNER_NAME}.github.io/${PAGES_REPO}/"
+fi
