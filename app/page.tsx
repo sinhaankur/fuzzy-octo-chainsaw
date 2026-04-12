@@ -1,11 +1,11 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import dynamic from 'next/dynamic'
 import { Activity, CheckCircle2, FileUp, Globe2, Search, Trash2, TriangleAlert } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
-import { InvestmentMap } from '@/components/stock/investment-map'
 import { parseWatchlistCsv, type ImportedWatchlistRow } from '@/lib/watchlist-csv'
 import {
 	defaultStocks,
@@ -13,6 +13,11 @@ import {
 	stockDatabase,
 	type Stock,
 } from '@/lib/stock-data'
+
+const InvestmentMap = dynamic(
+	() => import('@/components/stock/investment-map').then((module) => module.InvestmentMap),
+	{ ssr: false },
+)
 
 interface HoldingEntry {
 	symbol: string
